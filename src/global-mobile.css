@@ -1,0 +1,426 @@
+/* ══════════════════════════════════════════════════════════════
+   LITTLECHEF — GLOBAL MOBILE OPTIMIZATION
+   Applica principi A1-A12 su tutta l'app
+   ══════════════════════════════════════════════════════════════ */
+
+/* Safe area & viewport */
+:root {
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+
+  /* Colori light (default) */
+  --lc-bg:         #FFFFFF;
+  --lc-canvas:     #F9F9F8;
+  --lc-text:       #2D2D2D;
+  --lc-text-sec:   #737373;
+  --lc-border:     rgba(229,229,229,0.6);
+  --lc-accent:     #E69D43;
+}
+
+/* ── DARK MODE ── */
+[data-theme="dark"] {
+  color-scheme: dark;
+  --lc-bg:         #1A1A1A;
+  --lc-canvas:     #2D2D2D;
+  --lc-text:       #F5F5F5;
+  --lc-text-sec:   #A0A0A0;
+  --lc-border:     rgba(255,255,255,0.1);
+}
+
+[data-theme="dark"] body {
+  background: #1A1A1A !important;
+  color: #F5F5F5 !important;
+}
+
+[data-theme="dark"] #root {
+  background: #1A1A1A !important;
+  min-height: 100vh;
+}
+
+/* Card e container bianchi in dark mode */
+[data-theme="dark"] tr[style] {
+  background: #2D2D2D !important;
+  color: #F5F5F5 !important;
+  border-color: rgba(255,255,255,0.1) !important;
+}
+
+/* Input e select in dark mode */
+[data-theme="dark"] input,
+[data-theme="dark"] select,
+[data-theme="dark"] textarea {
+  background: #2D2D2D !important;
+  color: #F5F5F5 !important;
+  border-color: rgba(255,255,255,0.15) !important;
+}
+
+/* Scrollbar dark */
+[data-theme="dark"] ::-webkit-scrollbar-track {
+  background: #1A1A1A;
+}
+[data-theme="dark"] ::-webkit-scrollbar-thumb {
+  background: #444;
+}
+
+/* ── TRANSIZIONI GLOBALI ── */
+button,
+input,
+select,
+textarea,
+a {
+  transition: all 0.2s ease;
+}
+
+/* Slide-in per modali */
+[role="dialog"],
+.modal {
+  animation: slideUp 0.3s ease-out;
+}
+
+/* Fade per indicatori auto-save */
+.auto-save-indicator {
+  animation: fadeIn 0.2s ease;
+}
+
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes slideUp {
+  from { opacity: 0; transform: translateY(16px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  overflow-x: hidden; /* Nessun scroll orizzontale */
+}
+
+/* ── TOUCH TARGETS ── */
+button,
+a,
+[role="button"] {
+  min-height: 48px;
+  min-width: 48px;
+  touch-action: manipulation; /* Evita double-tap */
+}
+
+/* ── INPUT MOBILE ── */
+input[type="text"],
+input[type="number"],
+input[type="email"],
+input[type="tel"],
+input[type="password"],
+textarea,
+select {
+  font-size: 16px !important; /* Evita zoom iOS */
+  min-height: 48px;
+  padding: 12px 16px;
+  font-family: inherit;
+}
+
+/* ── TYPOGRAPHY RESPONSIVE ── */
+@media (max-width: 430px) {
+  h1 {
+    font-size: 28px !important;
+    line-height: 1.2 !important;
+  }
+
+  h2 {
+    font-size: 24px !important;
+  }
+
+  h3 {
+    font-size: 18px !important;
+  }
+
+  h4,
+  h5,
+  h6 {
+    font-size: 16px !important;
+  }
+
+  p,
+  span,
+  div {
+    font-size: 14px;
+  }
+
+  body {
+    font-size: 14px;
+  }
+}
+
+/* ── MODAL MOBILE ── */
+@media (max-width: 768px) {
+  [role="dialog"],
+  .modal,
+  [data-modal] {
+    position: fixed !important;
+    inset: 0 !important;
+    width: 100vw !important;
+    height: 100dvh !important;
+    max-width: 100% !important;
+    border-radius: 0 !important;
+    max-height: 100dvh !important;
+    overflow-y: auto !important;
+  }
+
+  [role="dialog"] > * > :first-child,
+  .modal > * > :first-child {
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+}
+
+/* ── TAB NAVIGATION MOBILE ── */
+.tab-nav,
+[role="tablist"] {
+  overflow-x: auto;
+  scroll-snap-type: x mandatory;
+  -webkit-overflow-scrolling: touch; /* Smooth scrolling iOS */
+  scrollbar-width: none; /* Hide scrollbar */
+}
+
+.tab-nav::-webkit-scrollbar {
+  display: none; /* Hide scrollbar Chrome */
+}
+
+.tab-nav > *,
+[role="tab"] {
+  scroll-snap-align: start;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+/* ── TABLE → CARD MOBILE ── */
+@media (max-width: 768px) {
+  table {
+    display: flex;
+    flex-direction: column;
+    border-collapse: initial;
+  }
+
+  thead {
+    display: none;
+  }
+
+  tbody {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  tr {
+    display: flex;
+    flex-direction: column;
+    border: 1px solid #e5e5e5;
+    border-radius: 8px;
+    padding: 16px;
+    background: white;
+    gap: 8px;
+  }
+
+  td {
+    display: grid;
+    grid-template-columns: auto 1fr;
+    gap: 8px;
+    align-items: center;
+    padding: 0 !important;
+  }
+
+  td::before {
+    content: attr(data-label);
+    font-weight: 600;
+    font-size: 12px;
+    color: #a3a3a3;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+}
+
+/* ── FORM MOBILE ── */
+@media (max-width: 768px) {
+  form {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  .form-row {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .form-row.two-col {
+    flex-direction: column !important;
+  }
+
+  .form-row.two-col > * {
+    width: 100% !important;
+    flex: 1 !important;
+  }
+
+  form > button,
+  .form-actions > button {
+    width: 100% !important;
+    min-height: 48px !important;
+  }
+}
+
+/* ── GRID MOBILE ── */
+@media (max-width: 768px) {
+  .grid-2col {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .grid-3col {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+
+  .grid-4col {
+    display: grid !important;
+    grid-template-columns: 1fr !important;
+    gap: 12px !important;
+  }
+}
+
+/* ── FLEX ROW → COL MOBILE ── */
+@media (max-width: 768px) {
+  .flex-row-mobile {
+    flex-direction: column !important;
+    gap: 12px !important;
+  }
+
+  .flex-row-mobile > * {
+    flex: 1 !important;
+  }
+}
+
+/* ── SPACING MOBILE ── */
+@media (max-width: 430px) {
+  /* Riduce padding laterale su schermi extra-small */
+  main,
+  [role="main"],
+  .container,
+  [data-container] {
+    padding-left: 16px !important;
+    padding-right: 16px !important;
+  }
+
+  /* Riduce gap tra sezioni */
+  > * + * {
+    margin-top: 16px !important;
+  }
+}
+
+/* ── BOTTOM NAV FIX ── */
+@media (max-width: 768px) {
+  body {
+    padding-bottom: 80px; /* Space per MobileNav */
+  }
+
+  main,
+  [role="main"] {
+    padding-bottom: 16px;
+  }
+}
+
+/* ── NO HOVER ON MOBILE ── */
+@media (hover: none) {
+  button:hover,
+  a:hover,
+  [role="button"]:hover {
+    transform: none !important;
+  }
+
+  button:active,
+  a:active,
+  [role="button"]:active {
+    opacity: 0.7;
+  }
+}
+
+/* ── ANIMATION PERFORMANCE ── */
+@media (prefers-reduced-motion: reduce) {
+  * {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* ── STICKY HEADER MOBILE ── */
+header[role="banner"],
+.sticky-header {
+  position: sticky;
+  top: 0;
+  z-index: 50;
+  padding-top: var(--safe-top);
+}
+
+/* ── SAFE AREA PADDING ── */
+.safe-area-top {
+  padding-top: var(--safe-top);
+}
+
+.safe-area-bottom {
+  padding-bottom: var(--safe-bottom);
+}
+
+.safe-area-left {
+  padding-left: var(--safe-left);
+}
+
+.safe-area-right {
+  padding-right: var(--safe-right);
+}
+
+/* ── LAZY LOADING ── */
+img {
+  loading: lazy;
+  decoding: async;
+}
+
+/* ── FONT SWAP ── */
+@font-face {
+  font-family: "Playfair Display";
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Inter";
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "JetBrains Mono";
+  font-display: swap;
+}
+
+/* ── VIEWPORT ── */
+@viewport {
+  width: device-width;
+  zoom: 1;
+}
+
+/* ── PREVENT ZOOM ON DOUBLE-TAP ── */
+input,
+textarea,
+select {
+  user-select: text;
+}
+
+button {
+  user-select: none;
+}
