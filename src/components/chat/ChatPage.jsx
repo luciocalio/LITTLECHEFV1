@@ -270,10 +270,15 @@ QUANDO L'UTENTE CHIEDE:
         },
       ];
 
-      // Tool execution handlers (async support)
+      // Tool execution handlers — OGNI handler legge da IndexedDB fresco,
+      // MAI dalla variabile `dishes` catturata all'inizio del turno. Questo
+      // evita che chiamate multiple nello stesso turno (es. update_dish_price
+      // eseguite in parallelo da Promise.all) si basino sulla stessa
+      // fotografia iniziale e si sovrascrivano a vicenda.
       const executeTool = async (toolName, toolInput) => {
         if (toolName === 'get_critical_dishes') {
-          const critical = (dishes || []).filter(d => (d.marginPct || 0) < 20);
+          const freshDishes = await getAllFromDB('dishes');
+          const critical = freshDishes.filter(d => (d.marginPct || 0) < 20);
           return JSON.stringify({
             count: critical.length,
             dishes: critical.map(d => ({
@@ -285,7 +290,8 @@ QUANDO L'UTENTE CHIEDE:
           });
         }
         if (toolName === 'get_dish_details') {
-          const dish = (dishes || []).find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
+          const freshDishes = await getAllFromDB('dishes');
+          const dish = freshDishes.find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
           if (!dish) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
           return JSON.stringify({
             name: dish.name,
@@ -302,12 +308,17 @@ QUANDO L'UTENTE CHIEDE:
           if (isNaN(newPrice) || newPrice <= 0) {
             return JSON.stringify({ error: 'Prezzo non valido' });
           }
-          const dishIdx = (dishes || []).findIndex(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
-          if (dishIdx === -1) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
 
-          const dish = dishes[dishIdx];
+          // (a) Lettura FRESCA del singolo piatto direttamente da IndexedDB,
+          // in questo preciso momento — mai dalla variabile `dishes` esterna.
+          const freshDishes = await getAllFromDB('dishes');
+          const dish = freshDishes.find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
+          if (!dish) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
+
           const oldPrice = dish.selling_price || dish.price;
           const oldMarginPct = dish.marginPct;
+
+          // (b) Modifica applicata SOLO al piatto richiesto da questa chiamata
           const updated = {
             ...dish,
             selling_price: newPrice,
@@ -315,21 +326,27 @@ QUANDO L'UTENTE CHIEDE:
             ...calcDishWithFixedCosts(dish.food_cost || 0, newPrice, fixedCostRatio),
             updated_at: new Date().toISOString(),
           };
-          const newDishes = [...dishes];
-          newDishes[dishIdx] = updated;
-          setDishes(newDishes);
 
-          // Await saveToDB per assicurarsi che la transazione sia completata
+          // (c) Scrittura del SOLO record modificato (put su singolo oggetto,
+          // mai sull'intero array) e attesa del completamento reale della
+          // transazione — saveToDB() già usa tx.oncomplete, non solo put().
           await saveToDB('dishes', updated);
 
-          // Rileggi dal DB per verificare che la scrittura è riuscita
-          const allDishesFromDB = await getAllFromDB('dishes');
-          const verifyFromDB = allDishesFromDB.find(d => d.id === updated.id);
+          // (d) Rilettura da IndexedDB per confermare che il valore scritto
+          // sia davvero quello atteso
+          const verifyDishes = await getAllFromDB('dishes');
+          const verifyFromDB = verifyDishes.find(d => d.id === updated.id);
 
           if (!verifyFromDB || verifyFromDB.selling_price !== newPrice) {
             return JSON.stringify({ error: 'Errore: la scrittura su IndexedDB non è riuscita' });
           }
 
+          // Aggiorna lo stato React con update funzionale (basato sullo stato
+          // precedente reale, non su una copia stale), così chiamate multiple
+          // in sequenza non si sovrascrivono a vicenda anche nella UI.
+          setDishes(prev => prev.map(d => d.id === verifyFromDB.id ? verifyFromDB : d));
+
+          // (e) Solo ora, con la scrittura verificata, si ritorna successo
           return JSON.stringify({
             success: true,
             oldPrice: oldPrice.toFixed(2),
@@ -339,7 +356,8 @@ QUANDO L'UTENTE CHIEDE:
           });
         }
         if (toolName === 'get_most_profitable_dish') {
-          const profitable = [...(dishes || [])].sort((a, b) => (b.marginPct || 0) - (a.marginPct || 0))[0];
+          const freshDishes = await getAllFromDB('dishes');
+          const profitable = [...freshDishes].sort((a, b) => (b.marginPct || 0) - (a.marginPct || 0))[0];
           if (!profitable) return JSON.stringify({ error: 'Nessun piatto trovato' });
           return JSON.stringify({
             name: profitable.name,
