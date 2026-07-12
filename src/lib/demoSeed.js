@@ -180,7 +180,185 @@ export async function seedDemoData() {
   const totalFixed = fixedCosts.reduce((s, c) => s + c.amount_monthly, 0); // 15780
   const ratio = calcFixedCostRatio(totalFixed, estimatedRevenue);           // ~0.343 esatto, mai hardcodato
 
+  const getComponentsForDish = (dishName) => {
+    const mapping = {
+      'Bruschetta al pomodoro': [
+        { ingName: 'Farina 00', qty: 100, unit: 'g' },
+        { ingName: 'Pomodori pelati', qty: 150, unit: 'g' },
+        { ingName: 'Aglio', qty: 8, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 20, unit: 'ml' },
+        { ingName: 'Basilico fresco', qty: 2, unit: 'g' },
+      ],
+      'Insalata caprese': [
+        { ingName: 'Pomodori pelati', qty: 120, unit: 'g' },
+        { ingName: 'Mozzarella fior di latte', qty: 150, unit: 'g' },
+        { ingName: 'Basilico fresco', qty: 5, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 25, unit: 'ml' },
+      ],
+      'Tagliere di salumi': [
+        { ingName: 'Salumi misti', qty: 200, unit: 'g' },
+      ],
+      'Frittura di calamari': [
+        { ingName: 'Calamari', qty: 300, unit: 'g' },
+        { ingName: 'Pangrattato', qty: 150, unit: 'g' },
+        { ingName: 'Olio per friggere', qty: 150, unit: 'ml' },
+        { ingName: 'Aglio', qty: 10, unit: 'g' },
+      ],
+      'Focaccia con rosmarino': [
+        { ingName: 'Farina 00', qty: 200, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 15, unit: 'ml' },
+      ],
+      'Burrata con pomodorini': [
+        { ingName: 'Mozzarella fior di latte', qty: 180, unit: 'g' },
+        { ingName: 'Pomodori pelati', qty: 100, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 30, unit: 'ml' },
+      ],
+      'Carpaccio di manzo': [
+        { ingName: 'Filetto di manzo', qty: 250, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 25, unit: 'ml' },
+      ],
+      'Panettone salato': [
+        { ingName: 'Farina 00', qty: 250, unit: 'g' },
+        { ingName: 'Uova', qty: 1, unit: 'pz' },
+        { ingName: 'Burro', qty: 50, unit: 'g' },
+      ],
+      'Spaghetti aglio olio e peperoncino': [
+        { ingName: 'Pasta di semola', qty: 100, unit: 'g' },
+        { ingName: 'Aglio', qty: 15, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 30, unit: 'ml' },
+      ],
+      'Spaghetti al pomodoro': [
+        { ingName: 'Pasta di semola', qty: 100, unit: 'g' },
+        { ingName: 'Pomodori pelati', qty: 150, unit: 'g' },
+        { ingName: 'Aglio', qty: 8, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 20, unit: 'ml' },
+        { ingName: 'Basilico fresco', qty: 2, unit: 'g' },
+      ],
+      'Spaghetti alla carbonara': [
+        { ingName: 'Pasta di semola', qty: 100, unit: 'g' },
+        { ingName: 'Guanciale', qty: 100, unit: 'g' },
+        { ingName: 'Uova', qty: 2, unit: 'pz' },
+        { ingName: 'Pecorino Romano', qty: 40, unit: 'g' },
+      ],
+      'Lasagna alla bolognese': [
+        { ingName: 'Pasta di semola', qty: 120, unit: 'g' },
+        { ingName: 'Filetto di manzo', qty: 80, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 20, unit: 'ml' },
+      ],
+      'Risotto ai funghi porcini': [
+        { ingName: 'Riso Carnaroli', qty: 150, unit: 'g' },
+        { ingName: 'Funghi porcini', qty: 100, unit: 'g' },
+        { ingName: 'Burro', qty: 40, unit: 'g' },
+      ],
+      'Pizza Margherita': [
+        { ingName: 'Farina 00', qty: 300, unit: 'g' },
+        { ingName: 'Pomodori pelati', qty: 100, unit: 'g' },
+        { ingName: 'Mozzarella fior di latte', qty: 80, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 20, unit: 'ml' },
+      ],
+      'Pasta alle vongole': [
+        { ingName: 'Pasta di semola', qty: 120, unit: 'g' },
+        { ingName: 'Vongole veraci', qty: 250, unit: 'g' },
+        { ingName: 'Aglio', qty: 10, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 30, unit: 'ml' },
+      ],
+      'Gnocchi al ragù': [
+        { ingName: 'Patate', qty: 100, unit: 'g' },
+        { ingName: 'Farina 00', qty: 50, unit: 'g' },
+        { ingName: 'Filetto di manzo', qty: 80, unit: 'g' },
+      ],
+      'Risotto al nero di seppia': [
+        { ingName: 'Riso Carnaroli', qty: 150, unit: 'g' },
+        { ingName: 'Calamari', qty: 80, unit: 'g' },
+        { ingName: 'Burro', qty: 35, unit: 'g' },
+      ],
+      'Pappardelle al cinghiale': [
+        { ingName: 'Pasta di semola', qty: 130, unit: 'g' },
+        { ingName: 'Filetto di manzo', qty: 120, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 25, unit: 'ml' },
+      ],
+      'Petto di pollo alla griglia': [
+        { ingName: 'Petto di pollo', qty: 250, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 20, unit: 'ml' },
+      ],
+      'Cotoletta alla milanese': [
+        { ingName: 'Petto di pollo', qty: 200, unit: 'g' },
+        { ingName: 'Pangrattato', qty: 80, unit: 'g' },
+        { ingName: 'Uova', qty: 1, unit: 'pz' },
+        { ingName: 'Olio per friggere', qty: 80, unit: 'ml' },
+      ],
+      'Filetto al pepe verde': [
+        { ingName: 'Filetto di manzo', qty: 350, unit: 'g' },
+        { ingName: 'Burro', qty: 50, unit: 'g' },
+      ],
+      'Tagliata di manzo': [
+        { ingName: 'Manzo controfiletto', qty: 400, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 25, unit: 'ml' },
+      ],
+      'Ossobuco alla milanese': [
+        { ingName: 'Ossobuco di vitello', qty: 350, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 25, unit: 'ml' },
+      ],
+      'Grigliata mista di pesce': [
+        { ingName: 'Pesce misto grigliata', qty: 400, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 30, unit: 'ml' },
+      ],
+      'Branzino al forno': [
+        { ingName: 'Pesce misto grigliata', qty: 350, unit: 'g' },
+        { ingName: 'Olio extravergine oliva', qty: 20, unit: 'ml' },
+        { ingName: 'Limoni', qty: 1, unit: 'pz' },
+      ],
+      'Coda di rospo in umido': [
+        { ingName: 'Pesce misto grigliata', qty: 350, unit: 'g' },
+        { ingName: 'Pomodori pelati', qty: 100, unit: 'g' },
+      ],
+      'Tacchino ripieno': [
+        { ingName: 'Petto di pollo', qty: 300, unit: 'g' },
+        { ingName: 'Burro', qty: 40, unit: 'g' },
+      ],
+      'Panna cotta': [
+        { ingName: 'Panna fresca', qty: 150, unit: 'ml' },
+        { ingName: 'Mascarpone', qty: 100, unit: 'g' },
+      ],
+      'Tortino al cioccolato': [
+        { ingName: 'Farina 00', qty: 80, unit: 'g' },
+        { ingName: 'Burro', qty: 80, unit: 'g' },
+        { ingName: 'Uova', qty: 2, unit: 'pz' },
+      ],
+      'Tiramisu': [
+        { ingName: 'Farina 00', qty: 100, unit: 'g' },
+        { ingName: 'Mascarpone', qty: 150, unit: 'g' },
+        { ingName: 'Uova', qty: 3, unit: 'pz' },
+      ],
+      'Panna cotta ai frutti di bosco': [
+        { ingName: 'Panna fresca', qty: 180, unit: 'ml' },
+        { ingName: 'Mascarpone', qty: 80, unit: 'g' },
+      ],
+      'Semifreddo al pistacchio': [
+        { ingName: 'Panna fresca', qty: 200, unit: 'ml' },
+        { ingName: 'Mascarpone', qty: 100, unit: 'g' },
+        { ingName: 'Uova', qty: 2, unit: 'pz' },
+      ],
+      'Zabaione': [
+        { ingName: 'Uova', qty: 6, unit: 'pz' },
+        { ingName: 'Burro', qty: 20, unit: 'g' },
+      ],
+    };
+    return mapping[dishName] || [];
+  };
+
   const dishes = DEMO_DISHES_SPEC.map(spec => {
+    const ingredientSpecs = getComponentsForDish(spec.name);
+    const components = ingredientSpecs.map(comp => {
+      const ing = ingredients.find(i => i.name === comp.ingName);
+      return {
+        type: 'ingredient',
+        id: ing?.id || comp.ingName,
+        quantity: comp.qty,
+        unit: comp.unit,
+      };
+    });
+
     const derived = calcDishWithFixedCosts(spec.foodCost, spec.price, ratio);
     return {
       id:                  `demo_dish_${spec.name.replace(/[^a-z0-9]/gi, '_').toLowerCase()}`,
@@ -194,7 +372,7 @@ export async function seedDemoData() {
       internalNotes:       '',
       ingredientUpdatedAt: now,
       updated_at:          now,
-      components:          [],
+      components,
       ...derived,
     };
   });

@@ -1,8 +1,8 @@
 // src/components/chat/ChatPage.jsx
 import { useState, useEffect, useRef } from 'react';
 import { TopBar }   from '../layout/TopBar';
-import { saveToDB } from '../../lib/db';
-import { calcDishFoodCost, calcMargin } from '../../lib/calcEngine';
+import { saveToDB, getAllFromDB } from '../../lib/db';
+import { calcDishFoodCost, calcMargin, calcDishWithFixedCosts } from '../../lib/calcEngine';
 
 const API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
 
@@ -212,76 +212,206 @@ export function ChatPage({
     }
 
     try {
-      const systemPrompt = `Sei il manager AI di LittleChef, braccio destro di ${restaurantName}.
+      const fixedCostRatio = 0.343; // Ratio calcolato in seeding
+
+      const systemPrompt = `Sei il Sous Chef AI di LittleChef, braccio destro di ${restaurantName}.
 Sei un esperto di food cost, F&B management e ingegneria dei menù.
 Rispondi SEMPRE in italiano, con tono professionale ma amichevole e diretto.
 Ogni risposta deve essere orientata al profitto e ai margini.
 
-DATI ATTUALI DEL RISTORANTE:
+DATI ATTUALI:
 ${JSON.stringify(buildContext(), null, 2)}
 
-QUANDO L'UTENTE VUOLE MODIFICARE DATI, rispondi SOLO con questo JSON:
-{
-  "message": "Risposta in italiano, es: Fatto Chef! Prezzo fragole aggiornato a €2.00/kg.",
-  "actions": [
-    { "type": "UPDATE_INGREDIENT_PRICE", "ingredientName": "fragole", "newPrice": 2.00 }
-  ]
-}
+Hai accesso a questi TOOL per leggere e modificare i dati in tempo reale:
+- get_critical_dishes: Piatti con margine < 20% (rossi, PROBLEMA!)
+- get_dish_details: Info complete di un piatto
+- update_dish_price: Cambia prezzo di vendita
+- get_most_profitable_dish: Piatto più redditizio
 
-TIPI DI ACTION DISPONIBILI:
-- UPDATE_INGREDIENT_PRICE: { type, ingredientName, newPrice }
-- UPDATE_FIXED_COST: { type, costName, newAmount }
-- ADD_FIXED_COST: { type, costName, costType, amount }
-- ADD_PRODUCT: { type, productName, category, sellingPrice, components }
-- UPDATE_PRODUCT: { type, productName, sellingPrice, components }
+QUANDO L'UTENTE CHIEDE:
+1. "Quali piatti sono critici?" o "Margini bassi?" → usa get_critical_dishes
+2. "Dettagli di [piatto]?" → usa get_dish_details
+3. "Aumenta prezzo di [piatto]?" → usa update_dish_price
+4. "Quale piatto guadagna più?" → usa get_most_profitable_dish
+5. SEMPRE rispondi in italiano con spiegazione, mai solo numeri
+6. NON usare markdown — testo plain, ben formattato`;
 
-Quando l'utente chiede di aggiungere/modificare costi fissi o prodotti, GENERA il JSON con le azioni corrispondenti.
-
-Se non ci sono azioni, rispondi con:
-{ "message": "Testo risposta" }
-
-NON usare markdown nelle risposte — solo testo plain.`;
-
-      const response = await fetch('https://api.anthropic.com/v1/messages', {
-        method: 'POST',
-        headers: {
-          'Content-Type':  'application/json',
-          'x-api-key':     API_KEY,
-          'anthropic-version': '2023-06-01',
-          'anthropic-dangerous-direct-browser-access': 'true',
+      const tools = [
+        {
+          name: 'get_critical_dishes',
+          description: 'Lista piatti con margine < 20% (status rosso). Serve per identificare i problemi.',
+          input_schema: { type: 'object', properties: {}, required: [] },
         },
-        body: JSON.stringify({
-          model:      'claude-sonnet-4-6',
-          max_tokens: 1000,
-          system:     systemPrompt,
-          messages:   [{ role: 'user', content: trimmed }],
-        }),
-      });
+        {
+          name: 'get_dish_details',
+          description: 'Dettagli completi di un piatto: costo ingredienti, costi fissi, margini.',
+          input_schema: {
+            type: 'object',
+            properties: { dishName: { type: 'string', description: 'Nome del piatto' } },
+            required: ['dishName'],
+          },
+        },
+        {
+          name: 'update_dish_price',
+          description: 'Modifica prezzo di vendita di un piatto. Ricalcola margini automaticamente.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              dishName: { type: 'string' },
+              newPrice: { type: 'number' },
+            },
+            required: ['dishName', 'newPrice'],
+          },
+        },
+        {
+          name: 'get_most_profitable_dish',
+          description: 'Piatto con il margine percentuale più alto.',
+          input_schema: { type: 'object', properties: {}, required: [] },
+        },
+      ];
 
-      if (!response.ok) {
-        const errData = await response.json().catch(() => ({}));
-        throw new Error(errData?.error?.message || `Errore HTTP ${response.status}`);
-      }
+      // Tool execution handlers (async support)
+      const executeTool = async (toolName, toolInput) => {
+        if (toolName === 'get_critical_dishes') {
+          const critical = (dishes || []).filter(d => (d.marginPct || 0) < 20);
+          return JSON.stringify({
+            count: critical.length,
+            dishes: critical.map(d => ({
+              name: d.name,
+              price: d.selling_price,
+              foodCost: d.food_cost,
+              marginPct: (d.marginPct || 0).toFixed(1),
+            })),
+          });
+        }
+        if (toolName === 'get_dish_details') {
+          const dish = (dishes || []).find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
+          if (!dish) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
+          return JSON.stringify({
+            name: dish.name,
+            price: dish.selling_price || dish.price,
+            foodCost: dish.food_cost,
+            fixedCostOnDish: (dish.fixedCostOnDish || 0).toFixed(2),
+            totalCost: (dish.totalCost || 0).toFixed(2),
+            grossMargin: (dish.grossMargin || 0).toFixed(2),
+            marginPct: (dish.marginPct || 0).toFixed(1),
+          });
+        }
+        if (toolName === 'update_dish_price') {
+          const newPrice = parseFloat(toolInput.newPrice);
+          if (isNaN(newPrice) || newPrice <= 0) {
+            return JSON.stringify({ error: 'Prezzo non valido' });
+          }
+          const dishIdx = (dishes || []).findIndex(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
+          if (dishIdx === -1) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
 
-      const data = await response.json();
-      const raw  = data.content?.[0]?.text || '';
+          const dish = dishes[dishIdx];
+          const oldPrice = dish.selling_price || dish.price;
+          const oldMarginPct = dish.marginPct;
+          const updated = {
+            ...dish,
+            selling_price: newPrice,
+            price: newPrice,
+            ...calcDishWithFixedCosts(dish.food_cost || 0, newPrice, fixedCostRatio),
+            updated_at: new Date().toISOString(),
+          };
+          const newDishes = [...dishes];
+          newDishes[dishIdx] = updated;
+          setDishes(newDishes);
 
-      let parsed;
-      try {
-        const clean = raw.replace(/```json|```/g, '').trim();
-        parsed = JSON.parse(clean);
-      } catch {
-        parsed = { message: raw };
-      }
+          // Await saveToDB per assicurarsi che la transazione sia completata
+          await saveToDB('dishes', updated);
 
-      if (parsed.actions?.length > 0) {
-        await applyActions(parsed.actions);
+          // Rileggi dal DB per verificare che la scrittura è riuscita
+          const allDishesFromDB = await getAllFromDB('dishes');
+          const verifyFromDB = allDishesFromDB.find(d => d.id === updated.id);
+
+          if (!verifyFromDB || verifyFromDB.selling_price !== newPrice) {
+            return JSON.stringify({ error: 'Errore: la scrittura su IndexedDB non è riuscita' });
+          }
+
+          return JSON.stringify({
+            success: true,
+            oldPrice: oldPrice.toFixed(2),
+            newPrice: newPrice.toFixed(2),
+            oldMarginPct: (oldMarginPct || 0).toFixed(1),
+            newMarginPct: (updated.marginPct || 0).toFixed(1),
+          });
+        }
+        if (toolName === 'get_most_profitable_dish') {
+          const profitable = [...(dishes || [])].sort((a, b) => (b.marginPct || 0) - (a.marginPct || 0))[0];
+          if (!profitable) return JSON.stringify({ error: 'Nessun piatto trovato' });
+          return JSON.stringify({
+            name: profitable.name,
+            price: profitable.selling_price || profitable.price,
+            foodCost: profitable.food_cost,
+            marginPct: (profitable.marginPct || 0).toFixed(1),
+            marginEuro: (profitable.grossMargin || 0).toFixed(2),
+          });
+        }
+        return JSON.stringify({ error: `Tool "${toolName}" sconosciuto` });
+      };
+
+      // Agentic loop — continua finché il modello non finisce
+      let messages = [{ role: 'user', content: trimmed }];
+      let continueLoop = true;
+      let finalText = '';
+
+      while (continueLoop) {
+        const response = await fetch('https://api.anthropic.com/v1/messages', {
+          method: 'POST',
+          headers: {
+            'Content-Type':  'application/json',
+            'x-api-key':     API_KEY,
+            'anthropic-version': '2023-06-01',
+            'anthropic-dangerous-direct-browser-access': 'true',
+          },
+          body: JSON.stringify({
+            model:      'claude-sonnet-4-6',
+            max_tokens: 2000,
+            system:     systemPrompt,
+            tools,
+            messages,
+          }),
+        });
+
+        if (!response.ok) {
+          const errData = await response.json().catch(() => ({}));
+          throw new Error(errData?.error?.message || `Errore HTTP ${response.status}`);
+        }
+
+        const data = await response.json();
+        const assistantContent = data.content || [];
+        const stopReason = data.stop_reason;
+
+        // Estrai tool uses e testo
+        const toolUses = assistantContent.filter(c => c.type === 'tool_use');
+        const textBlock = assistantContent.find(c => c.type === 'text');
+
+        if (toolUses.length > 0 && stopReason === 'tool_use') {
+          // Turno con tool uses — NON salvare il testo, continua il loop
+          messages.push({ role: 'assistant', content: assistantContent });
+
+          // Esegui tool e raccogli risultati (awaited)
+          const toolResults = await Promise.all(toolUses.map(async toolUse => ({
+            type: 'tool_result',
+            tool_use_id: toolUse.id,
+            content: await executeTool(toolUse.name, toolUse.input),
+          })));
+
+          messages.push({ role: 'user', content: toolResults });
+          continueLoop = true;
+        } else {
+          // Fine del loop — salva SOLO il testo finale
+          if (textBlock) finalText = textBlock.text;
+          continueLoop = false;
+        }
       }
 
       setMessages(prev => [...prev, {
         id:   crypto.randomUUID(),
         role: 'assistant',
-        text: parsed.message || raw,
+        text: finalText || 'Assistente pronto',
         time: new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
       }]);
 
