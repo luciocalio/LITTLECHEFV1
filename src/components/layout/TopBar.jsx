@@ -6,7 +6,7 @@ const ALL_TABS = [
   { id: 'tutorial', icon: '📚', label: 'Tutorial'  },
 ];
 
-export function TopBar({ currentPage, onNavigate, onOpenSettings }) {
+export function TopBar({ currentPage, onNavigate, onOpenSettings, restaurant }) {
   // Mostra tutti i tab TRANNE quello corrente
   const tabs = ALL_TABS.filter(t => t.id !== currentPage);
 
@@ -24,6 +24,21 @@ export function TopBar({ currentPage, onNavigate, onOpenSettings }) {
       height:       '52px',
       gap:          '2px',
     }}>
+      {/* LOCALE LOGGATO — logo + nome */}
+      {restaurant && (
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 6px', flexShrink: 0, maxWidth: '38%' }}>
+          {restaurant.logo_url ? (
+            <img src={restaurant.logo_url} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--gold)' }} />
+          ) : (
+            <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--gold-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>👨‍🍳</div>
+          )}
+          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+            {restaurant.name}
+          </span>
+        </div>
+      )}
+      {restaurant && <div style={{ width: 1, height: 24, background: 'var(--border-color)', margin: '0 2px' }} />}
+
       {/* TAB NAVIGAZIONE */}
       {tabs.map(tab => (
         <button

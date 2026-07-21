@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { useTheme } from '../../hooks/useTheme';
+import { supabase } from '../../lib/supabase';
 
 const DEFAULT_SETTINGS = {
   restaurantName: 'Il mio Ristorante',
@@ -56,7 +57,7 @@ function Row({ label, children }) {
 // ══════════════════════════════════════════════════════
 //  SETTINGS MODAL
 // ══════════════════════════════════════════════════════
-export function SettingsModal({ onClose, isDark: isDarkProp, toggleTheme: toggleThemeProp }) {
+export function SettingsModal({ onClose, restaurant, onOpenScanner, isDark: isDarkProp, toggleTheme: toggleThemeProp }) {
   const { settings, update } = useSettings();
   const { isDark: isDarkHook, toggleTheme: toggleThemeHook } = useTheme();
   const isDark      = isDarkProp      !== undefined ? isDarkProp      : isDarkHook;
@@ -65,9 +66,36 @@ export function SettingsModal({ onClose, isDark: isDarkProp, toggleTheme: toggle
   const [nameInput, setNameInput] = useState(settings.restaurantName);
   const [confirmUnsub, setConfirmUnsub] = useState(false);
 
-  const handleLogout = () => {
+  // ── Eliminazione account e dati ──
+  const venueName = restaurant?.name || '';
+  const [showDelete,   setShowDelete]   = useState(false);
+  const [deleteInput,  setDeleteInput]  = useState('');
+  const [deleteError,  setDeleteError]  = useState(null);
+  const [deleting,     setDeleting]     = useState(false);
+
+  const handleDeleteAccount = async () => {
+    if (deleteInput.trim() !== venueName) {
+      setDeleteError('Il nome del locale non corrisponde.');
+      return;
+    }
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      // Elimina la riga restaurants: CASCADE cancella piatti, dispensa,
+      // preparazioni, costi fissi, sezioni e contatori collegati.
+      const { error } = await supabase.from('restaurants').delete().eq('id', restaurant.id);
+      if (error) throw error;
+      await supabase.auth.signOut();
+      window.location.reload();
+    } catch (err) {
+      setDeleteError(err.message || 'Errore durante l\'eliminazione.');
+      setDeleting(false);
+    }
+  };
+
+  const handleLogout = async () => {
     if (window.confirm('Vuoi uscire dal tuo account?')) {
-      localStorage.removeItem('lc-user');
+      await supabase.auth.signOut();
       window.location.reload();
     }
   };
@@ -178,12 +206,23 @@ export function SettingsModal({ onClose, isDark: isDarkProp, toggleTheme: toggle
             </Row>
           </Section>
 
+          {/* IMPORTA DATI */}
+          {onOpenScanner && (
+            <Section title="📷 Importa dati">
+              <button className="btn-secondary" style={{ fontSize: 13 }} onClick={onOpenScanner}>
+                📷 Importa da foto, PDF o Excel
+              </button>
+              <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+                Scansiona un menù o un listino fornitore: rivedi i dati estratti prima di salvarli.
+              </p>
+            </Section>
+          )}
+
           {/* DEMO */}
           <Section title="🎬 Demo">
             <button className="btn-secondary" style={{ fontSize: 13 }} onClick={async () => {
-              const { seedDemoData } = await import('../../lib/demoSeed');
-              await seedDemoData();
-              localStorage.setItem('lc_demo_seeded', 'true');
+              const { seedDemoSupabase } = await import('../../lib/dataService');
+              await seedDemoSupabase();
               window.location.reload();
             }}>
               🎬 Carica Dati Demo
@@ -201,6 +240,52 @@ export function SettingsModal({ onClose, isDark: isDarkProp, toggleTheme: toggle
           >
             🚪 Logout
           </button>
+
+          {/* ELIMINA ACCOUNT */}
+          <Section title="⚠️ Zona pericolosa">
+            {!showDelete ? (
+              <button
+                className="btn-secondary"
+                onClick={() => { setShowDelete(true); setDeleteError(null); setDeleteInput(''); }}
+                style={{ fontSize: 13, color: 'var(--status-risk)', borderColor: 'var(--status-risk)' }}
+              >
+                🗑️ Elimina account e tutti i dati
+              </button>
+            ) : (
+              <div style={{ background: 'var(--status-risk-bg)', border: '1px solid var(--status-risk)', borderRadius: 'var(--radius-sm)', padding: '14px' }}>
+                <p style={{ fontSize: 13, color: 'var(--status-risk)', fontWeight: 700, margin: '0 0 6px' }}>
+                  Questa azione è irreversibile.
+                </p>
+                <p style={{ fontSize: 12, color: 'var(--text-secondary)', margin: '0 0 10px', lineHeight: 1.5 }}>
+                  Verranno cancellati definitivamente tutti i piatti, la dispensa, i costi fissi e le impostazioni.
+                  Per confermare scrivi il nome del locale: <strong>{venueName}</strong>
+                </p>
+                {deleteError && (
+                  <p style={{ fontSize: 12, color: 'var(--status-risk)', margin: '0 0 8px' }}>{deleteError}</p>
+                )}
+                <input
+                  className="form-input"
+                  value={deleteInput}
+                  onChange={e => setDeleteInput(e.target.value)}
+                  placeholder={venueName}
+                  style={{ marginBottom: 10 }}
+                />
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <button
+                    className="btn-primary"
+                    disabled={deleting}
+                    onClick={handleDeleteAccount}
+                    style={{ background: 'var(--status-risk)' }}
+                  >
+                    {deleting ? 'Elimino...' : 'Elimina definitivamente'}
+                  </button>
+                  <button className="btn-secondary" onClick={() => setShowDelete(false)} disabled={deleting}>
+                    Annulla
+                  </button>
+                </div>
+              </div>
+            )}
+          </Section>
         </div>
       </div>
     </div>

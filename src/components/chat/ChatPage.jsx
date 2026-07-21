@@ -1,10 +1,12 @@
 // src/components/chat/ChatPage.jsx
 import { useState, useEffect, useRef } from 'react';
 import { TopBar }   from '../layout/TopBar';
-import { saveToDB, getAllFromDB } from '../../lib/db';
+import { saveToDB, getAllFromDB } from '../../lib/dataService';
+import { supabase } from '../../lib/supabase';
+import { DAILY_MESSAGE_LIMIT } from '../../lib/config';
 import { calcDishFoodCost, calcMargin, calcDishWithFixedCosts } from '../../lib/calcEngine';
 
-const API_KEY = import.meta.env.VITE_ANTHROPIC_API_KEY;
+// La chiave Anthropic vive lato server (funzione /api/chat), mai nel bundle.
 
 const QUICK_REPLIES = [
   { label: '🔄 Aggiorna prezzo ingredienti', prompt: 'Voglio aggiornare il prezzo di un ingrediente' },
@@ -12,6 +14,15 @@ const QUICK_REPLIES = [
   { label: '💰 Cambia costo fisso',           prompt: 'Voglio modificare un costo fisso'             },
   { label: '📊 Controlla margini',            prompt: 'Analizza i margini dei miei prodotti'         },
 ];
+
+// Etichette in italiano mostrate nell'indicatore dedicato mentre il Sous Chef
+// sta effettivamente chiamando un tool (distinto dal generico "sta scrivendo").
+const TOOL_LABELS = {
+  get_critical_dishes:      '🔍 Controllo i piatti con margine basso...',
+  get_dish_details:         '📋 Recupero i dettagli del piatto...',
+  update_dish_price:        '💾 Aggiorno il prezzo e ricalcolo i margini...',
+  get_most_profitable_dish: '🏆 Cerco il piatto più redditizio...',
+};
 
 function welcomeMessage(name) {
   return {
@@ -29,13 +40,18 @@ export function ChatPage({
   preparations,
   dishes, setDishes,
   fixedCosts, setFixedCosts,
+  fixedCostRatio = 0,
+  restaurant,
+  onDishUpdated,
 }) {
-  const restaurantName = localStorage.getItem('lc-restaurant-name') ||
+  const restaurantName = restaurant?.name ||
+    localStorage.getItem('lc-restaurant-name') ||
     (() => { try { return JSON.parse(localStorage.getItem('lc-settings') || '{}').restaurantName || 'Chef'; } catch { return 'Chef'; } })();
 
   const [messages, setMessages] = useState([welcomeMessage(restaurantName)]);
-  const [input,    setInput]    = useState('');
-  const [loading,  setLoading]  = useState(false);
+  const [input,      setInput]      = useState('');
+  const [loading,    setLoading]    = useState(false);
+  const [toolStatus, setToolStatus] = useState(null); // testo dedicato durante le chiamate tool
   const bottomRef = useRef(null);
   const inputRef  = useRef(null);
 
@@ -199,20 +215,28 @@ export function ChatPage({
     setInput('');
     setLoading(true);
 
-    // Se non c'è API key configurata, risponde offline
-    if (!API_KEY || !API_KEY.startsWith('sk-ant-')) {
-      setMessages(prev => [...prev, {
-        id:   crypto.randomUUID(),
-        role: 'assistant',
-        text: 'API key non configurata. Aggiungi VITE_ANTHROPIC_API_KEY nel file .env.local per abilitare la chat AI.',
-        time: new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
-      }]);
-      setLoading(false);
-      return;
+    // Limite giornaliero messaggi (contatore atomico su Supabase, reset a
+    // mezzanotte Europe/Rome). Fail-open in caso di errore del contatore:
+    // un glitch non deve mai bloccare la chat.
+    try {
+      const { data: gate, error: gateErr } = await supabase.rpc('increment_message_count', { p_limit: DAILY_MESSAGE_LIMIT });
+      if (!gateErr && gate && gate.allowed === false && !gate.error) {
+        setMessages(prev => [...prev, {
+          id:   crypto.randomUUID(),
+          role: 'assistant',
+          text: `Hai raggiunto il limite di ${DAILY_MESSAGE_LIMIT} messaggi per oggi. Riprova domani — il conteggio si azzera a mezzanotte.`,
+          time: new Date().toLocaleTimeString('it-IT', { hour: '2-digit', minute: '2-digit' }),
+        }]);
+        setLoading(false);
+        return;
+      }
+    } catch (e) {
+      console.warn('[ChatPage] Contatore messaggi non disponibile, procedo:', e);
     }
 
     try {
-      const fixedCostRatio = 0.343; // Ratio calcolato in seeding
+      // fixedCostRatio arriva come prop da App (totale fissi / ricavi stimati),
+      // mai più hardcodato: così update_dish_price ricalcola i margini reali.
 
       const systemPrompt = `Sei il Sous Chef AI di LittleChef, braccio destro di ${restaurantName}.
 Sei un esperto di food cost, F&B management e ingegneria dei menù.
@@ -346,6 +370,11 @@ QUANDO L'UTENTE CHIEDE:
           // in sequenza non si sovrascrivono a vicenda anche nella UI.
           setDishes(prev => prev.map(d => d.id === verifyFromDB.id ? verifyFromDB : d));
 
+          // Segnala all'app che questo piatto è stato appena aggiornato, così
+          // la pagina Prodotti può mostrare un flash visivo quando l'utente
+          // ci naviga (le due pagine non sono mai montate insieme).
+          onDishUpdated?.(verifyFromDB.id);
+
           // (e) Solo ora, con la scrittura verificata, si ritorna successo
           return JSON.stringify({
             success: true,
@@ -376,14 +405,11 @@ QUANDO L'UTENTE CHIEDE:
       let finalText = '';
 
       while (continueLoop) {
-        const response = await fetch('https://api.anthropic.com/v1/messages', {
+        // Chiamata alla funzione serverless: la chiave Anthropic sta lì,
+        // il client non la vede mai. Il loop agentico resta qui.
+        const response = await fetch('/api/chat', {
           method: 'POST',
-          headers: {
-            'Content-Type':  'application/json',
-            'x-api-key':     API_KEY,
-            'anthropic-version': '2023-06-01',
-            'anthropic-dangerous-direct-browser-access': 'true',
-          },
+          headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             model:      'claude-sonnet-4-6',
             max_tokens: 2000,
@@ -410,6 +436,12 @@ QUANDO L'UTENTE CHIEDE:
           // Turno con tool uses — NON salvare il testo, continua il loop
           messages.push({ role: 'assistant', content: assistantContent });
 
+          // Indicatore dedicato (sostituisce i puntini generici) finché non
+          // arriva la risposta testuale finale — resta visibile anche
+          // durante la chiamata successiva che genera la spiegazione.
+          const labels = toolUses.map(t => TOOL_LABELS[t.name] || 'Sto elaborando...');
+          setToolStatus(labels.length > 1 ? '🔧 Sto aggiornando più dati...' : labels[0]);
+
           // Esegui tool e raccogli risultati (awaited)
           const toolResults = await Promise.all(toolUses.map(async toolUse => ({
             type: 'tool_result',
@@ -423,6 +455,7 @@ QUANDO L'UTENTE CHIEDE:
           // Fine del loop — salva SOLO il testo finale
           if (textBlock) finalText = textBlock.text;
           continueLoop = false;
+          setToolStatus(null);
         }
       }
 
@@ -443,6 +476,7 @@ QUANDO L'UTENTE CHIEDE:
       }]);
     } finally {
       setLoading(false);
+      setToolStatus(null);
       inputRef.current?.focus();
     }
   }
@@ -459,6 +493,7 @@ QUANDO L'UTENTE CHIEDE:
         currentPage={currentPage}
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
+        restaurant={restaurant}
       />
 
       {/* HEADER CHAT */}
@@ -561,26 +596,42 @@ QUANDO L'UTENTE CHIEDE:
           </div>
         ))}
 
-        {/* TYPING INDICATOR */}
+        {/* TYPING INDICATOR — puntini generici mentre pensa, testo dedicato durante i tool call */}
         {loading && (
           <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
             <div style={{
-              padding: '12px 16px', background: 'var(--bg-card)',
+              padding: toolStatus ? '10px 16px' : '12px 16px',
+              background: 'var(--bg-card)',
               borderRadius: '18px 18px 18px 4px',
               border: '1px solid var(--border-color)',
-              display: 'flex', gap: '4px', alignItems: 'center',
+              display: 'flex', gap: '8px', alignItems: 'center',
             }}>
-              {[0.0, 0.2, 0.4].map(delay => (
-                <div key={delay} style={{
-                  width: '6px', height: '6px', borderRadius: '50%',
-                  background: 'var(--text-muted)',
-                  animation: `bounce 1s ${delay}s infinite`,
-                }} />
-              ))}
+              {toolStatus ? (
+                <>
+                  <span style={{ fontSize: '14px', display: 'inline-block', animation: 'spin 1s linear infinite' }}>⚙️</span>
+                  <span style={{ fontSize: '13px', color: 'var(--text-secondary)' }}>{toolStatus}</span>
+                </>
+              ) : (
+                [0.0, 0.2, 0.4].map(delay => (
+                  <div key={delay} style={{
+                    width: '6px', height: '6px', borderRadius: '50%',
+                    background: 'var(--text-muted)',
+                    animation: `bounce 1s ${delay}s infinite`,
+                  }} />
+                ))
+              )}
             </div>
           </div>
         )}
         <div ref={bottomRef} />
+      </div>
+
+      {/* DISCLAIMER — discreto, sopra l'input */}
+      <div style={{
+        padding: '4px 16px 0', background: 'var(--bg-card)',
+        fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', lineHeight: 1.4,
+      }}>
+        I suggerimenti del Sous Chef sono indicativi. La decisione finale resta sempre tua.
       </div>
 
       {/* INPUT BAR */}
@@ -642,6 +693,10 @@ QUANDO L'UTENTE CHIEDE:
         @keyframes bounce {
           0%, 80%, 100% { transform: translateY(0); }
           40%            { transform: translateY(-6px); }
+        }
+        @keyframes spin {
+          from { transform: rotate(0deg); }
+          to   { transform: rotate(360deg); }
         }
       `}</style>
     </div>

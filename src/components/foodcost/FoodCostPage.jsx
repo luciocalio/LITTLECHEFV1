@@ -12,7 +12,8 @@ import {
   calcTotalFixedCosts,
   calcFixedCostRatio,
 } from '../../lib/calcEngine';
-import { saveToDB, deleteFromDB } from '../../lib/db';
+import { saveToDB, deleteFromDB } from '../../lib/dataService';
+import { MAX_INGREDIENT_PRICE } from '../../lib/config';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 
@@ -39,6 +40,7 @@ function IngredienteModal({ item, onSave, onClose }) {
     if (!name.trim()) { setError('Il nome è obbligatorio.'); return; }
     const priceVal = parseFloat(price);
     if (isNaN(priceVal) || priceVal < 0) { setError('Prezzo non valido.'); return; }
+    if (priceVal > MAX_INGREDIENT_PRICE) { setError(`Prezzo troppo alto: massimo ${MAX_INGREDIENT_PRICE} € per unità.`); return; }
 
     let finalPrice = priceVal;
     if (item && item.unit && item.unit !== unit) {
@@ -505,6 +507,7 @@ export function FoodCostPage({
   fixedCosts,   setFixedCosts,
   estimatedRevenue       = 0,
   onEstimatedRevenueChange,
+  restaurant,
 }) {
   const [section,      setSection]      = useState('dispensa');
   const [searchQuery,  setSearchQuery]  = useState('');
@@ -597,7 +600,7 @@ export function FoodCostPage({
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', background: 'var(--bg-primary)' }}>
 
       {/* TOP BAR */}
-      <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} />
+      <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
 
       {/* HEADER + SEGMENTED CONTROL */}
       <div style={{

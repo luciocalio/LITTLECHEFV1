@@ -152,7 +152,9 @@ const DEMO_DISHES_SPEC = [
 ];
 // TOT=47 piatti (26 originali + 21 nuovi)
 
-export async function seedDemoData() {
+// Costruisce (senza scrivere) tutti i dati demo. Usato sia dal seeder
+// IndexedDB legacy sia dal seeder Supabase (dataService.seedDemoSupabase).
+export function buildDemoData() {
   const now = new Date().toISOString();
 
   const ingredients = DEMO_INGREDIENTS_SPEC.map(ing => ({
@@ -377,6 +379,14 @@ export async function seedDemoData() {
     };
   });
 
+  return { ingredients, fixedCosts, dishes, sections: DEMO_SECTIONS, estimatedRevenue, totalFixed, ratio };
+}
+
+// Seeder IndexedDB legacy (mantenuto ma non più su alcun percorso attivo:
+// dallo Stage 2 i dati demo vanno su Supabase — vedi dataService.seedDemoSupabase).
+export async function seedDemoData() {
+  const { ingredients, fixedCosts, dishes, estimatedRevenue, totalFixed, ratio } = buildDemoData();
+
   await dbSetAll('sections',     DEMO_SECTIONS);
   await dbSetAll('ingredients',  ingredients);
   await dbSetAll('fixed_costs',  fixedCosts);
@@ -385,7 +395,7 @@ export async function seedDemoData() {
   await dbSetSetting('estimatedMonthlyRevenue', estimatedRevenue);
 
   console.log(
-    `✅ Demo V13: ${ingredients.length} ingredienti, ${fixedCosts.length} costi fissi, ` +
+    `✅ Demo V13 (IndexedDB): ${ingredients.length} ingredienti, ${fixedCosts.length} costi fissi, ` +
     `${dishes.length} piatti · fissi totali: €${totalFixed} · ratio: ${(ratio * 100).toFixed(1)}%`
   );
 

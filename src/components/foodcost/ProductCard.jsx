@@ -1,5 +1,6 @@
 // src/components/foodcost/ProductCard.jsx — V10
 // Card prodotto con semaforo, costi breakdown e azioni
+import { useEffect, useState } from 'react';
 
 function marginColor(pct) {
   if (pct >= 60) return '#16a34a';   // verde
@@ -22,7 +23,18 @@ function marginDot(pct) {
   return '🔴';
 }
 
-export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDelete, isFirstRedDemo }) {
+export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDelete, isFirstRedDemo, flashKey }) {
+  // Flash visivo quando il piatto è stato appena aggiornato dal Sous Chef (chat).
+  // Il timer riparte ogni volta che flashKey cambia (nuovo update), anche se
+  // il componente non si è mai smontato.
+  const [isFlashing, setIsFlashing] = useState(false);
+  useEffect(() => {
+    if (!flashKey) return;
+    setIsFlashing(true);
+    const t = setTimeout(() => setIsFlashing(false), 1600);
+    return () => clearTimeout(t);
+  }, [flashKey]);
+
   const sellPr    = parseFloat(dish.selling_price || dish.price || 0);
   const ingCost   = parseFloat(dish.food_cost || 0);
   const hasFixed  = parseFloat(dish.fixedCostOnDish) > 0;
@@ -45,6 +57,7 @@ export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDele
       marginBottom: 8,
       opacity: isHidden ? 0.6 : 1,
       transition: 'opacity 0.2s',
+      animation: isFlashing ? 'productCardFlash 1.6s ease-out' : undefined,
     }}>
       {/* ROW 1: nome + prezzo + semaforo */}
       <div style={{ display: 'flex', alignItems: 'flex-start', gap: 10, padding: '12px 14px 6px' }}>

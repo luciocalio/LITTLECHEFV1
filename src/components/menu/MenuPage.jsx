@@ -11,11 +11,12 @@ import {
   calcMargin,
 } from '../../lib/calcEngine';
 import { calcDishAllergens } from '../../lib/allergens';
-import { saveToDB, deleteFromDB } from '../../lib/db';
+import { saveToDB, deleteFromDB } from '../../lib/dataService';
 import { ProductCard }     from '../foodcost/ProductCard';
 import { SectionHeader }   from '../foodcost/SectionHeader';
 import { FilterBar, applyFiltersAndSort } from '../foodcost/FilterBar';
 import { PriceSuggestion } from '../foodcost/PriceSuggestion';
+import { MAX_DISH_PRICE } from '../../lib/config';
 import { DemoBanner }      from '../demo/DemoBanner';
 import { DemoTour }        from '../demo/DemoTour';
 
@@ -167,6 +168,7 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
   const handleSave = async () => {
     if (!name.trim())  { setError('Il nome è obbligatorio.'); return; }
     if (priceNum <= 0) { setError('Il prezzo di vendita deve essere > 0.'); return; }
+    if (priceNum > MAX_DISH_PRICE) { setError(`Prezzo troppo alto: massimo ${MAX_DISH_PRICE} € per piatto.`); return; }
 
     const cleanComps = components.filter(c => c.id_ref && parseFloat(c.qty) > 0);
     const calculatedFoodCost = useManualCost
@@ -422,6 +424,9 @@ export function MenuPage({
   ingredients, preparations,
   sections, setSections,
   isDemoMode, handleResetDemo,
+  recentlyUpdatedDishes,
+  restaurant,
+  onOpenScanner,
 }) {
   const [showAddModal,       setShowAddModal]       = useState(false);
   const [editingDish,        setEditingDish]        = useState(null);
@@ -580,7 +585,7 @@ export function MenuPage({
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', background: 'var(--bg-primary)' }}>
 
       {/* TOP BAR */}
-      <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} />
+      <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
 
       {/* DEMO BANNER */}
       {isDemoMode && <DemoBanner onReset={handleResetDemo} />}
@@ -646,8 +651,41 @@ export function MenuPage({
         )}
       </div>
 
+      {/* EMPTY STATE GUIDATO — nessun piatto ancora */}
+      {(dishes || []).length === 0 && (
+        <div style={{ padding: '32px 20px', textAlign: 'center' }}>
+          <div style={{ fontSize: 44, marginBottom: 12 }}>🍽️</div>
+          <h2 style={{ fontFamily: 'Playfair Display, serif', fontSize: 20, fontWeight: 700, color: 'var(--text-primary)', margin: '0 0 8px' }}>
+            Il tuo menù è vuoto
+          </h2>
+          <p style={{ fontSize: 14, color: 'var(--text-muted)', margin: '0 auto 20px', maxWidth: 340, lineHeight: 1.5 }}>
+            Inizia in uno di questi modi:
+          </p>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10, maxWidth: 300, margin: '0 auto' }}>
+            <button onClick={() => openAdd(activeSections[0]?.name || 'ANTIPASTO')} style={{
+              padding: '12px 16px', minHeight: 48, background: 'var(--gold)', color: '#fff',
+              border: 'none', borderRadius: 10, fontSize: 14, fontWeight: 700, cursor: 'pointer',
+            }}>
+              ➕ Aggiungi il primo piatto
+            </button>
+            <button onClick={handleResetDemo} style={{
+              padding: '12px 16px', minHeight: 48, background: 'none', color: 'var(--gold)',
+              border: '1px solid var(--gold)', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            }}>
+              🎬 Carica dati demo
+            </button>
+            <button onClick={() => onOpenScanner?.()} style={{
+              padding: '12px 16px', minHeight: 48, background: 'none', color: 'var(--gold)',
+              border: '1px solid var(--gold)', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
+            }}>
+              📷 Scansiona il menù
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* LISTA SEZIONI */}
-      <div id="product-list-demo" style={{ flex: 1, padding: '12px 16px 32px', overflowY: 'auto' }}>
+      <div id="product-list-demo" style={{ flex: 1, padding: '12px 16px 32px', overflowY: 'auto', display: (dishes || []).length === 0 ? 'none' : undefined }}>
         {activeSections.map((section, idx) => {
           const rawDishes = (dishes || []).filter(d =>
             (d.category || '').toUpperCase() === section.name.toUpperCase()
@@ -695,6 +733,7 @@ export function MenuPage({
                     onToggleVisible={() => handleToggleVisible(dish)}
                     onDelete={() => requestDeleteDish(dish.id, dish.name)}
                     isFirstRedDemo={isDemoMode && dish.id === firstRedId}
+                    flashKey={(recentlyUpdatedDishes || []).find(e => e.id === dish.id)?.ts || null}
                   />
                 ))
               )}
@@ -753,6 +792,13 @@ export function MenuPage({
 
       {/* DEMO TOUR */}
       {isDemoMode && <DemoTour hasData={(dishes || []).length > 0} />}
+
+      <style>{`
+        @keyframes productCardFlash {
+          0%   { box-shadow: 0 0 0 3px rgba(234,179,8,0.55); background: rgba(234,179,8,0.14); }
+          100% { box-shadow: 0 0 0 0 rgba(234,179,8,0); background: var(--bg-card); }
+        }
+      `}</style>
     </div>
   );
 }

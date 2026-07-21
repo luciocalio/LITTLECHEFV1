@@ -1,16 +1,22 @@
 // src/App.jsx — V11
 import { useState, useEffect, useMemo, useCallback } from 'react';
+import { supabase, getMyRestaurant } from './lib/supabase.js';
+import { AuthPage }      from './components/auth/AuthPage.jsx';
+import { ResetPassword } from './components/auth/ResetPassword.jsx';
 import { ChatPage }      from './components/chat/ChatPage.jsx';
 import { FoodCostPage }  from './components/foodcost/FoodCostPage.jsx';
 import { MenuPage }      from './components/menu/MenuPage.jsx';
 import { TutorialPage }  from './components/tutorial/TutorialPage.jsx';
 import { SettingsModal } from './components/settings/SettingsModal.jsx';
+import { ImportScanner } from './components/import/ImportScanner.jsx';
 import {
   calcDishFoodCost, calcMargin,
   calcFixedCostRatio, calcDishWithFixedCosts,
 } from './lib/calcEngine.js';
-import { getAllFromDB, dbGetSetting, dbSetSetting, saveToDB } from './lib/db.js';
-import { insertSeedData } from './lib/seedData.js';
+import {
+  getAllFromDB, dbSetSetting, saveToDB,
+  seedDemoSupabase, clearRestaurantCache,
+} from './lib/dataService.js';
 
 const DEFAULT_SECTIONS = [
   { id: 'sec_antipasto', name: 'ANTIPASTO',  order: 0 },
@@ -21,8 +27,44 @@ const DEFAULT_SECTIONS = [
 ];
 
 export default function App() {
+  // ── Autenticazione ────────────────────────────────────────────────────────
+  // session: undefined = verifica in corso, null = non loggato, object = loggato
+  const [session,      setSession]      = useState(undefined);
+  const [restaurant,   setRestaurant]   = useState(null);
+  const [welcomeDone,  setWelcomeDone]  = useState(false);
+  const [recoveryMode, setRecoveryMode] = useState(false);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => setSession(data.session ?? null));
+    const { data: sub } = supabase.auth.onAuthStateChange((event, sess) => {
+      if (event === 'PASSWORD_RECOVERY') { setRecoveryMode(true); }
+      setSession(sess ?? null);
+      if (!sess) {
+        setRestaurant(null);
+        setWelcomeDone(false);
+        clearRestaurantCache();
+        setIngredients([]); setPreparations([]); setDishes([]);
+        setFixedCosts([]); setSections([]); setEstimatedRevenue(0);
+      }
+    });
+    return () => sub.subscription.unsubscribe();
+  }, []);
+
+  // Carica la riga restaurants dell'account loggato.
+  // Se è già stata passata da AuthPage (registrazione), non serve rileggerla:
+  // evita il race in cui l'evento SIGNED_IN scatta prima che l'insert del
+  // ristorante sia committato e getMyRestaurant tornerebbe null.
+  useEffect(() => {
+    if (!session) return;
+    if (restaurant) return;
+    getMyRestaurant()
+      .then(setRestaurant)
+      .catch(err => console.error('[App] Errore caricamento ristorante:', err));
+  }, [session, restaurant]);
+
   const [currentPage,       setCurrentPage]       = useState('chat');
   const [showSettings,      setShowSettings]       = useState(false);
+  const [showScanner,       setShowScanner]        = useState(false);
   const [ingredients,       setIngredients]        = useState([]);
   const [preparations,      setPreparations]       = useState([]);
   const [dishes,            setDishes]             = useState([]);
@@ -30,6 +72,7 @@ export default function App() {
   const [estimatedRevenue,  setEstimatedRevenue]   = useState(0);
   const [sections,          setSections]           = useState([]);
   const [isSeeding,         setIsSeeding]          = useState(false);
+  const [recentlyUpdatedDishes, setRecentlyUpdatedDishes] = useState([]); // [{id, ts}] — per flash visivo su Prodotti dopo update da chat
 
   // ── Demo mode ─────────────────────────────────────────────────────────────
   const isDemoMode = useMemo(
@@ -37,52 +80,44 @@ export default function App() {
     []
   );
 
-  // Seed demo data on first ?demo=true visit, then reload
+  // Seed demo su Supabase alla prima visita ?demo=true (richiede ristorante loggato)
   useEffect(() => {
-    if (!isDemoMode) return;
-    if (localStorage.getItem('lc_demo_seeded')) return;
+    if (!isDemoMode || !restaurant) return;
+    if (localStorage.getItem(`lc_demo_seeded_${restaurant.id}`)) return;
     setIsSeeding(true);
-    import('./lib/demoSeed').then(({ seedDemoData }) =>
-      seedDemoData().then(() => {
-        localStorage.setItem('lc_demo_seeded', 'true');
-        window.location.reload();
-      })
-    );
-  }, [isDemoMode]); // eslint-disable-line
+    seedDemoSupabase().then(() => {
+      localStorage.setItem(`lc_demo_seeded_${restaurant.id}`, 'true');
+      window.location.reload();
+    }).catch(err => { console.error('[App] Seed demo fallito:', err); setIsSeeding(false); });
+  }, [isDemoMode, restaurant]); // eslint-disable-line
 
-  // window.seedDemoData() — richiamabile da console
+  // window.seedDemoData() — richiamabile da console (carica la demo su Supabase)
   useEffect(() => {
     window.seedDemoData = async () => {
-      const { seedDemoData } = await import('./lib/demoSeed');
-      await seedDemoData();
-      localStorage.setItem('lc_demo_seeded', 'true');
+      await seedDemoSupabase();
       window.location.reload();
     };
     return () => { delete window.seedDemoData; };
   }, []);
 
+  // Carica i dati del ristorante loggato da Supabase (gate su restaurant)
   useEffect(() => {
+    if (!restaurant) return;
     async function loadAll() {
       try {
-        const [rawIng, rawPrep, rawDishes, rawFixed, rawSections, savedRevenue] = await Promise.all([
+        const [rawIng, rawPrep, rawDishes, rawFixed, rawSections] = await Promise.all([
           getAllFromDB('ingredients'),
           getAllFromDB('preparations'),
           getAllFromDB('dishes'),
           getAllFromDB('fixed_costs'),
           getAllFromDB('sections'),
-          dbGetSetting('estimatedMonthlyRevenue'),
         ]);
 
-        let ings  = rawIng   || [];
-        let preps = rawPrep  || [];
+        const ings  = rawIng   || [];
+        const preps = rawPrep  || [];
         const fixed = rawFixed || [];
-        let rawD  = rawDishes || [];
-
-        if (ings.length === 0 && rawD.length === 0) {
-          const seeded = await insertSeedData();
-          ings = seeded.ingredients;
-          rawD = seeded.dishes;
-        }
+        const rawD  = rawDishes || [];
+        const savedRevenue = restaurant.estimated_monthly_revenue ?? 0;
 
         const dishs = rawD.map(d => {
           const comps = (d.components || []).filter(c => c.id_ref || c.id);
@@ -102,11 +137,12 @@ export default function App() {
           return { ...d, food_cost: fc, margin_euro: marginEuro, margin_pct: marginPct, status };
         });
 
-        // Seed sections se primo avvio
+        // Seed sections se primo avvio — id unici per ristorante
+        // (la PK è globale: usare id fissi farebbe collidere ristoranti diversi)
         let secs = rawSections || [];
         if (secs.length === 0) {
-          await Promise.all(DEFAULT_SECTIONS.map(s => saveToDB('sections', s)));
-          secs = DEFAULT_SECTIONS;
+          secs = DEFAULT_SECTIONS.map(s => ({ ...s, id: `${restaurant.id}_${s.id}` }));
+          await Promise.all(secs.map(s => saveToDB('sections', s)));
         }
 
         setIngredients(ings);
@@ -120,7 +156,7 @@ export default function App() {
       }
     }
     loadAll();
-  }, []);
+  }, [restaurant]);
 
   // ── Totale costi fissi mensili (dalla lista fixed_costs)
   const totalFixed = useMemo(() =>
@@ -147,21 +183,29 @@ export default function App() {
     [dishes, fixedCostRatio]
   );
 
-  // ── Salva estimatedRevenue su IndexedDB (key-value store)
+  // ── Salva estimatedRevenue sulla riga restaurants (Supabase)
   const handleEstimatedRevenueChange = useCallback(async value => {
     const val = parseFloat(value) || 0;
     setEstimatedRevenue(val);
     await dbSetSetting('estimatedMonthlyRevenue', val);
   }, []);
 
-  // ── Reset demo: ripopola i dati e ricarica
+  // ── Flash visivo su Prodotti quando il Sous Chef aggiorna un piatto —
+  // l'entry si auto-rimuove dopo 20s così tornare sulla pagina più tardi
+  // non ri-innesca l'animazione.
+  const handleDishUpdated = useCallback(id => {
+    const ts = Date.now();
+    setRecentlyUpdatedDishes(prev => [...prev.filter(e => e.id !== id), { id, ts }]);
+    setTimeout(() => {
+      setRecentlyUpdatedDishes(prev => prev.filter(e => !(e.id === id && e.ts === ts)));
+    }, 20000);
+  }, []);
+
+  // ── Reset demo: ripopola i dati del ristorante su Supabase e ricarica
   const handleResetDemo = useCallback(async () => {
-    localStorage.removeItem('lc_demo_seeded');
     localStorage.removeItem('lc_demo_banner_dismissed');
     localStorage.removeItem('lc_demo_tour_done');
-    const { seedDemoData } = await import('./lib/demoSeed');
-    await seedDemoData();
-    localStorage.setItem('lc_demo_seeded', 'true');
+    await seedDemoSupabase();
     window.location.reload();
   }, []);
 
@@ -178,10 +222,83 @@ export default function App() {
     sections,     setSections,
     isDemoMode,
     handleResetDemo,
+    recentlyUpdatedDishes,
+    onDishUpdated: handleDishUpdated,
+    restaurant,
     currentPage,
     onNavigate:     setCurrentPage,
     onOpenSettings: () => setShowSettings(true),
+    onOpenScanner:  () => setShowScanner(true),
   };
+
+  // ── Recupero password: link dall'email → imposta nuova password ───────────
+  if (recoveryMode) {
+    return <ResetPassword onDone={() => setRecoveryMode(false)} />;
+  }
+
+  // ── Gate autenticazione ───────────────────────────────────────────────────
+  if (session === undefined) {
+    return (
+      <div style={{ minHeight: '100dvh', background: 'var(--bg-primary)', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+        <p style={{ color: 'var(--text-muted)', fontSize: 15 }}>⏳ Verifica sessione...</p>
+      </div>
+    );
+  }
+
+  if (!session) {
+    return (
+      <AuthPage
+        onAuthed={setSession}
+        onRegistered={(sess, rest) => { setRestaurant(rest); setSession(sess); }}
+      />
+    );
+  }
+
+  // Schermata di benvenuto post-login (Stage 1: il resto dell'app resta su IndexedDB)
+  if (!welcomeDone) {
+    return (
+      <div style={{
+        minHeight: '100dvh', background: 'var(--bg-primary)',
+        display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20,
+      }}>
+        <div style={{
+          textAlign: 'center', background: 'var(--bg-card)',
+          border: '1px solid var(--border-color)', borderRadius: 16,
+          padding: '40px 32px', maxWidth: 420, width: '100%',
+          boxShadow: '0 4px 24px rgba(0,0,0,0.08)',
+        }}>
+          {restaurant?.logo_url ? (
+            <img
+              src={restaurant.logo_url}
+              alt="Logo del locale"
+              style={{ width: 88, height: 88, borderRadius: '50%', objectFit: 'cover', marginBottom: 16, border: '3px solid var(--gold)' }}
+            />
+          ) : (
+            <div style={{ fontSize: 56, marginBottom: 12 }}>👨‍🍳</div>
+          )}
+          <h1 style={{
+            fontFamily: 'Playfair Display, serif', fontSize: 26, fontWeight: 700,
+            margin: '0 0 6px', color: 'var(--text-primary)',
+          }}>
+            Bentornato, {restaurant?.name || '...'}
+          </h1>
+          <p style={{ fontSize: 13, color: 'var(--text-muted)', margin: '0 0 24px' }}>
+            Il tuo locale ti aspetta.
+          </p>
+          <button
+            onClick={() => setWelcomeDone(true)}
+            style={{
+              padding: '13px 32px', minHeight: 48, background: 'var(--gold)',
+              color: '#fff', border: 'none', borderRadius: 10,
+              fontSize: 15, fontWeight: 700, cursor: 'pointer',
+            }}
+          >
+            Entra →
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   if (isSeeding) {
     return (
@@ -198,7 +315,19 @@ export default function App() {
       {currentPage === 'menu'     && <MenuPage     {...sharedProps} />}
       {currentPage === 'tutorial' && <TutorialPage {...sharedProps} />}
 
-      {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+      {showSettings && (
+        <SettingsModal
+          onClose={() => setShowSettings(false)}
+          restaurant={restaurant}
+          onOpenScanner={() => { setShowSettings(false); setShowScanner(true); }}
+        />
+      )}
+      {showScanner && (
+        <ImportScanner
+          onClose={() => setShowScanner(false)}
+          onImported={() => window.location.reload()}
+        />
+      )}
     </div>
   );
 }
