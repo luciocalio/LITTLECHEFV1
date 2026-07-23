@@ -43,6 +43,7 @@ export function ChatPage({
   fixedCostRatio = 0,
   restaurant,
   onDishUpdated,
+  foodcostSection,
 }) {
   const restaurantName = restaurant?.name ||
     localStorage.getItem('lc-restaurant-name') ||
@@ -491,6 +492,7 @@ QUANDO L'UTENTE CHIEDE:
       {/* TOP BAR */}
       <TopBar
         currentPage={currentPage}
+        foodcostSection={foodcostSection}
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
         restaurant={restaurant}
@@ -661,7 +663,7 @@ QUANDO L'UTENTE CHIEDE:
             borderRadius: '24px',
             background:   'var(--bg-input)',
             color:        'var(--text-primary)',
-            fontSize:     '14px',
+            fontSize:     '16px',
             outline:      'none',
             minHeight:    '44px',
           }}

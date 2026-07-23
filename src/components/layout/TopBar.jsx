@@ -1,103 +1,89 @@
-// src/components/layout/TopBar.jsx
-const ALL_TABS = [
-  { id: 'chat',     icon: '💬', label: 'Chat'      },
-  { id: 'foodcost', icon: '🧾', label: 'Food Cost' },
-  { id: 'menu',     icon: '📋', label: 'Prodotti'  },
-  { id: 'tutorial', icon: '📚', label: 'Tutorial'  },
+// src/components/layout/TopBar.jsx — Stage 6C
+// Navigazione superiore SEMPRE completa e persistente: tutte le voci
+// sempre visibili (mai nascoste, mai a scomparsa). La sezione attiva è
+// evidenziata in Gold. Su mobile la barra scorre in orizzontale se le
+// voci non entrano — nessun hamburger che nasconde le sezioni.
+
+const NAV = [
+  { id: 'chat',     icon: '💬', label: 'Chat',        page: 'chat' },
+  { id: 'dispensa', icon: '🧺', label: 'Dispensa',    page: 'foodcost', section: 'dispensa' },
+  { id: 'fissi',    icon: '💶', label: 'Costi Fissi', page: 'foodcost', section: 'fissi' },
+  { id: 'menu',     icon: '📋', label: 'Prodotti',    page: 'menu' },
 ];
 
-export function TopBar({ currentPage, onNavigate, onOpenSettings, restaurant }) {
-  // Mostra tutti i tab TRANNE quello corrente
-  const tabs = ALL_TABS.filter(t => t.id !== currentPage);
+export function TopBar({ currentPage, foodcostSection = 'dispensa', onNavigate, onOpenSettings, restaurant }) {
+  const isActive = item => {
+    if (item.page === 'foodcost') return currentPage === 'foodcost' && foodcostSection === item.section;
+    return currentPage === item.page;
+  };
 
   return (
     <div style={{
-      position:     'sticky',
-      top:          0,
-      zIndex:       100,
-      display:      'flex',
-      alignItems:   'center',
-      background:   'var(--bg-card)',
-      borderBottom: '1px solid var(--border-color)',
-      boxShadow:    '0 1px 4px rgba(0,0,0,0.06)',
-      padding:      '0 4px',
-      height:       '52px',
-      gap:          '2px',
+      position: 'sticky', top: 0, zIndex: 100,
+      display: 'flex', alignItems: 'center',
+      background: 'var(--bg-card)', borderBottom: '1px solid var(--border-color)',
+      boxShadow: '0 1px 4px rgba(0,0,0,0.06)',
+      padding: '0 4px', minHeight: '52px', gap: '2px',
     }}>
-      {/* LOCALE LOGGATO — logo + nome */}
+      {/* LOCALE LOGGATO — logo (nome nascosto su schermi stretti) */}
       {restaurant && (
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, padding: '0 8px 0 6px', flexShrink: 0, maxWidth: '38%' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '0 4px 0 4px', flexShrink: 0, maxWidth: '34%' }}>
           {restaurant.logo_url ? (
-            <img src={restaurant.logo_url} alt="" style={{ width: 28, height: 28, borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--gold)' }} />
+            <img src={restaurant.logo_url} alt="" style={{ width: 30, height: 30, borderRadius: '50%', objectFit: 'cover', border: '1.5px solid var(--gold)' }} />
           ) : (
-            <div style={{ width: 28, height: 28, borderRadius: '50%', background: 'var(--gold-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 15 }}>👨‍🍳</div>
+            <div style={{ width: 30, height: 30, borderRadius: '50%', background: 'var(--gold-light)', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 16 }}>👨‍🍳</div>
           )}
-          <span style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+          <span className="topbar-venue" style={{ fontSize: 12, fontWeight: 700, color: 'var(--text-primary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
             {restaurant.name}
           </span>
         </div>
       )}
-      {restaurant && <div style={{ width: 1, height: 24, background: 'var(--border-color)', margin: '0 2px' }} />}
 
-      {/* TAB NAVIGAZIONE */}
-      {tabs.map(tab => (
-        <button
-          key={tab.id}
-          onClick={() => onNavigate(tab.id)}
-          style={{
-            flex:           1,
-            display:        'flex',
-            flexDirection:  'column',
-            alignItems:     'center',
-            justifyContent: 'center',
-            gap:            '2px',
-            padding:        '6px 4px',
-            background:     'none',
-            border:         'none',
-            borderRadius:   '6px',
-            cursor:         'pointer',
-            color:          'var(--text-muted)',
-            minHeight:      '44px',
-            transition:     'color 0.15s, background 0.15s',
-          }}
-          onMouseEnter={e => {
-            e.currentTarget.style.color      = 'var(--gold)';
-            e.currentTarget.style.background = 'var(--bg-secondary)';
-          }}
-          onMouseLeave={e => {
-            e.currentTarget.style.color      = 'var(--text-muted)';
-            e.currentTarget.style.background = 'none';
-          }}
-        >
-          <span style={{ fontSize: '16px', lineHeight: 1 }}>{tab.icon}</span>
-          <span style={{ fontSize: '10px', fontWeight: '500', whiteSpace: 'nowrap' }}>
-            {tab.label}
-          </span>
-        </button>
-      ))}
-
-      {/* SEPARATORE */}
-      <div style={{ width: '1px', height: '28px', background: 'var(--border-color)', margin: '0 4px' }} />
+      {/* NAV — sempre tutte le voci; scroll orizzontale se non entrano */}
+      <div style={{
+        flex: 1, display: 'flex', alignItems: 'stretch', gap: 2,
+        overflowX: 'auto', overflowY: 'hidden',
+        scrollbarWidth: 'none', WebkitOverflowScrolling: 'touch',
+      }}>
+        {NAV.map(item => {
+          const active = isActive(item);
+          return (
+            <button
+              key={item.id}
+              onClick={() => onNavigate(item.page, item.section)}
+              aria-current={active ? 'page' : undefined}
+              style={{
+                flex: '1 0 auto', minWidth: 60,
+                display: 'flex', flexDirection: 'column',
+                alignItems: 'center', justifyContent: 'center', gap: 2,
+                padding: '6px 8px', minHeight: 44,
+                background: active ? 'var(--gold-light)' : 'none',
+                border: 'none',
+                borderBottom: active ? '2px solid var(--gold)' : '2px solid transparent',
+                borderRadius: '6px 6px 0 0',
+                cursor: 'pointer',
+                color: active ? 'var(--gold)' : 'var(--text-muted)',
+                fontWeight: active ? 700 : 500,
+                transition: 'color 0.15s, background 0.15s',
+              }}
+            >
+              <span style={{ fontSize: 16, lineHeight: 1 }}>{item.icon}</span>
+              <span style={{ fontSize: 10, whiteSpace: 'nowrap' }}>{item.label}</span>
+            </button>
+          );
+        })}
+      </div>
 
       {/* SETTINGS */}
       <button
         onClick={onOpenSettings}
+        aria-label="Impostazioni"
         style={{
-          width:          '44px',
-          minHeight:      '44px',
-          display:        'flex',
-          alignItems:     'center',
-          justifyContent: 'center',
-          background:     'none',
-          border:         'none',
-          borderRadius:   '6px',
-          cursor:         'pointer',
-          fontSize:       '18px',
-          color:          'var(--text-muted)',
-          transition:     'color 0.15s',
+          width: 44, minHeight: 44, flexShrink: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'none', border: 'none', borderRadius: 6,
+          cursor: 'pointer', fontSize: 18, color: 'var(--text-muted)',
         }}
-        onMouseEnter={e => e.currentTarget.style.color = 'var(--gold)'}
-        onMouseLeave={e => e.currentTarget.style.color = 'var(--text-muted)'}
       >
         ⚙️
       </button>

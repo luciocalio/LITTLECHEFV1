@@ -6,7 +6,6 @@ import { ResetPassword } from './components/auth/ResetPassword.jsx';
 import { ChatPage }      from './components/chat/ChatPage.jsx';
 import { FoodCostPage }  from './components/foodcost/FoodCostPage.jsx';
 import { MenuPage }      from './components/menu/MenuPage.jsx';
-import { TutorialPage }  from './components/tutorial/TutorialPage.jsx';
 import { SettingsModal } from './components/settings/SettingsModal.jsx';
 import { ImportScanner } from './components/import/ImportScanner.jsx';
 import {
@@ -63,8 +62,9 @@ export default function App() {
   }, [session, restaurant]);
 
   const [currentPage,       setCurrentPage]       = useState('chat');
+  const [foodcostSection,   setFoodcostSection]    = useState('dispensa'); // segmento Food Cost controllato dalla nav
   const [showSettings,      setShowSettings]       = useState(false);
-  const [showScanner,       setShowScanner]        = useState(false);
+  const [scannerKind,       setScannerKind]        = useState(null); // 'pantry'|'fixed_costs'|'dishes' o null
   const [ingredients,       setIngredients]        = useState([]);
   const [preparations,      setPreparations]       = useState([]);
   const [dishes,            setDishes]             = useState([]);
@@ -74,31 +74,9 @@ export default function App() {
   const [isSeeding,         setIsSeeding]          = useState(false);
   const [recentlyUpdatedDishes, setRecentlyUpdatedDishes] = useState([]); // [{id, ts}] — per flash visivo su Prodotti dopo update da chat
 
-  // ── Demo mode ─────────────────────────────────────────────────────────────
-  const isDemoMode = useMemo(
-    () => new URLSearchParams(window.location.search).get('demo') === 'true',
-    []
-  );
-
-  // Seed demo su Supabase alla prima visita ?demo=true (richiede ristorante loggato)
-  useEffect(() => {
-    if (!isDemoMode || !restaurant) return;
-    if (localStorage.getItem(`lc_demo_seeded_${restaurant.id}`)) return;
-    setIsSeeding(true);
-    seedDemoSupabase().then(() => {
-      localStorage.setItem(`lc_demo_seeded_${restaurant.id}`, 'true');
-      window.location.reload();
-    }).catch(err => { console.error('[App] Seed demo fallito:', err); setIsSeeding(false); });
-  }, [isDemoMode, restaurant]); // eslint-disable-line
-
-  // window.seedDemoData() — richiamabile da console (carica la demo su Supabase)
-  useEffect(() => {
-    window.seedDemoData = async () => {
-      await seedDemoSupabase();
-      window.location.reload();
-    };
-    return () => { delete window.seedDemoData; };
-  }, []);
+  // 6B: NESSUN seeding automatico di dati demo. Ogni account nuovo parte
+  // vuoto. La demo si carica SOLO dal bottone in Settings, visibile al solo
+  // account proprietario (OWNER_EMAIL) — vedi SettingsModal.
 
   // Carica i dati del ristorante loggato da Supabase (gate su restaurant)
   useEffect(() => {
@@ -201,14 +179,6 @@ export default function App() {
     }, 20000);
   }, []);
 
-  // ── Reset demo: ripopola i dati del ristorante su Supabase e ricarica
-  const handleResetDemo = useCallback(async () => {
-    localStorage.removeItem('lc_demo_banner_dismissed');
-    localStorage.removeItem('lc_demo_tour_done');
-    await seedDemoSupabase();
-    window.location.reload();
-  }, []);
-
   const sharedProps = {
     ingredients,  setIngredients,
     preparations, setPreparations,
@@ -220,15 +190,18 @@ export default function App() {
     fixedCostRatio,
     totalFixed,
     sections,     setSections,
-    isDemoMode,
-    handleResetDemo,
     recentlyUpdatedDishes,
     onDishUpdated: handleDishUpdated,
     restaurant,
     currentPage,
-    onNavigate:     setCurrentPage,
+    foodcostSection,
+    onFoodcostSection: setFoodcostSection,
+    onNavigate: (page, section) => {
+      setCurrentPage(page);
+      if (page === 'foodcost' && section) setFoodcostSection(section);
+    },
     onOpenSettings: () => setShowSettings(true),
-    onOpenScanner:  () => setShowScanner(true),
+    onOpenScanner:  (kind) => setScannerKind(kind), // apre lo scanner col tipo della sezione
   };
 
   // ── Recupero password: link dall'email → imposta nuova password ───────────
@@ -313,18 +286,22 @@ export default function App() {
       {currentPage === 'chat'     && <ChatPage     {...sharedProps} />}
       {currentPage === 'foodcost' && <FoodCostPage {...sharedProps} />}
       {currentPage === 'menu'     && <MenuPage     {...sharedProps} />}
-      {currentPage === 'tutorial' && <TutorialPage {...sharedProps} />}
 
       {showSettings && (
         <SettingsModal
           onClose={() => setShowSettings(false)}
           restaurant={restaurant}
-          onOpenScanner={() => { setShowSettings(false); setShowScanner(true); }}
+          userEmail={session?.user?.email || ''}
+          dishesCount={(dishes || []).length}
+          ingredientsCount={(ingredients || []).length}
+          fixedCount={(fixedCosts || []).length}
+          totalFixed={totalFixed}
         />
       )}
-      {showScanner && (
+      {scannerKind && (
         <ImportScanner
-          onClose={() => setShowScanner(false)}
+          kind={scannerKind}
+          onClose={() => setScannerKind(null)}
           onImported={() => window.location.reload()}
         />
       )}

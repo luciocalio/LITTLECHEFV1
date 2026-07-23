@@ -1,8 +1,13 @@
 // ══════════════════════════════════════════════════════════════
-//  LITTLECHEF · ImportScanner — scanner documenti (Stage 5)
+//  LITTLECHEF · ImportScanner — scanner documenti contestuale (Stage 6A)
 //  Foto/PDF → /api/scan (Claude, chiave lato server) · Excel/CSV → xlsx.
-//  SEMPRE una schermata di revisione modificabile PRIMA di scrivere
-//  qualsiasi cosa su Supabase. Nessun salvataggio automatico.
+//  PARAMETRICO sul tipo di destinazione, deciso da CHI lo apre:
+//    kind='pantry'      → dispensa / ingredienti (pantry_items)
+//    kind='fixed_costs' → voci di costo fisso (fixed_costs)
+//    kind='dishes'      → piatti del menù (dishes)
+//  Prompt di estrazione e colonne di revisione si adattano al tipo.
+//  SEMPRE una revisione modificabile PRIMA di scrivere su Supabase.
+//  Nessun salvataggio automatico o silenzioso, mai.
 // ══════════════════════════════════════════════════════════════
 import { useState, useRef } from 'react';
 import * as XLSX from 'xlsx';
@@ -12,27 +17,63 @@ import { MAX_DISH_PRICE, MAX_INGREDIENT_PRICE } from '../../lib/config';
 const uid = () => Math.random().toString(36).slice(2, 10);
 const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? '' : n; };
 
-// Mappa best-effort delle colonne di un foglio a nome/prezzo/unità/quantità
-function mapSpreadsheet(rows, kind) {
-  if (!rows.length) return [];
-  const keys = Object.keys(rows[0]);
+// Configurazione per tipo di destinazione
+const KINDS = {
+  pantry: {
+    title: '📷 Importa ingredienti in Dispensa',
+    secondCol: { key: 'unit', label: 'Unità' },
+    priceLabel: 'Prezzo €/unità',
+    emptyMsg: 'Non ho trovato ingredienti o materie prime in questo documento. Prova con una fattura o un listino fornitore.',
+    store: 'ingredients',
+  },
+  fixed_costs: {
+    title: '📷 Importa voci di costo fisso',
+    secondCol: null,
+    priceLabel: 'Importo €/mese',
+    emptyMsg: 'Non ho trovato voci di costo fisso in questo documento. Prova con una fattura di affitto, utenze o servizi.',
+    store: 'fixed_costs',
+  },
+  dishes: {
+    title: '📷 Importa piatti nel Menù',
+    secondCol: { key: 'category', label: 'Categoria' },
+    priceLabel: 'Prezzo €',
+    emptyMsg: 'Non ho trovato piatti di menù in questo documento. Prova con la foto di un menù.',
+    store: 'dishes',
+  },
+};
+
+// Mappa best-effort le colonne di un foglio in base al tipo
+function mapSpreadsheet(sheetRows, kind) {
+  if (!sheetRows.length) return [];
+  const keys = Object.keys(sheetRows[0]);
   const find = (...cands) => keys.find(k => cands.some(c => k.toLowerCase().includes(c)));
-  const kName  = find('nome', 'name', 'prodotto', 'piatto', 'descr', 'articolo');
-  const kPrice = find('prezzo', 'price', 'costo', 'importo', '€', 'eur');
-  const kUnit  = find('unità', 'unita', 'unit', 'um', 'misura');
-  const kQty   = find('quantità', 'quantita', 'qty', 'quant');
-  const kCat   = find('categoria', 'category', 'reparto', 'sezione');
-  return rows.map(r => kind === 'menu'
-    ? { id: uid(), name: r[kName] || '', price: num(r[kPrice]), category: (r[kCat] || '').toString().toUpperCase() }
-    : { id: uid(), name: r[kName] || '', price: num(r[kPrice]), unit: (r[kUnit] || '').toString(), quantity: kQty ? num(r[kQty]) : '' }
-  ).filter(x => x.name);
+  const kName   = find('nome', 'name', 'prodotto', 'piatto', 'voce', 'descr', 'articolo');
+  const kPrice  = find('prezzo', 'price', 'costo', 'importo', '€', 'eur', 'amount');
+  const kUnit   = find('unità', 'unita', 'unit', 'um', 'misura');
+  const kCat    = find('categoria', 'category', 'reparto', 'sezione');
+  return sheetRows.map(r => {
+    const base = { id: uid(), name: (r[kName] || '').toString(), price: num(r[kPrice]) };
+    if (kind === 'dishes')      return { ...base, category: (r[kCat] || '').toString().toUpperCase() };
+    if (kind === 'pantry')      return { ...base, unit: (r[kUnit] || '').toString() };
+    return base; // fixed_costs
+  }).filter(x => x.name.trim());
 }
 
-export function ImportScanner({ onClose, onImported }) {
-  const [kind,   setKind]   = useState('menu');       // 'menu' | 'invoice'
-  const [step,   setStep]   = useState('pick');        // pick | loading | review | saving
-  const [rows,   setRows]   = useState([]);
-  const [error,  setError]  = useState(null);
+// Normalizza gli item ritornati da /api/scan in base al tipo
+function mapScanned(items, kind) {
+  return (items || []).map(it => {
+    const base = { id: uid(), name: (it.name || '').toString() };
+    if (kind === 'dishes')      return { ...base, price: num(it.price), category: (it.category || '').toString().toUpperCase() };
+    if (kind === 'pantry')      return { ...base, price: num(it.price), unit: (it.unit || '').toString() };
+    return { ...base, price: num(it.amount) }; // fixed_costs: amount → price
+  }).filter(x => x.name.trim());
+}
+
+export function ImportScanner({ kind = 'dishes', onClose, onImported }) {
+  const cfg = KINDS[kind] || KINDS.dishes;
+  const [step,  setStep]  = useState('pick');   // pick | loading | review | saving | empty
+  const [rows,  setRows]  = useState([]);
+  const [error, setError] = useState(null);
   const fileRef = useRef(null);
 
   const fileToBase64 = file => new Promise((resolve, reject) => {
@@ -56,7 +97,7 @@ export function ImportScanner({ onClose, onImported }) {
         const sheet = wb.Sheets[wb.SheetNames[0]];
         const json = XLSX.utils.sheet_to_json(sheet, { defval: '' });
         const mapped = mapSpreadsheet(json, kind);
-        if (!mapped.length) { setError('Nessuna riga riconosciuta nel foglio. Controlla che ci siano colonne con nome e prezzo.'); return; }
+        if (!mapped.length) { setStep('empty'); return; }
         setRows(mapped);
         setStep('review');
       } catch (err) {
@@ -65,7 +106,7 @@ export function ImportScanner({ onClose, onImported }) {
       return;
     }
 
-    // Immagine o PDF → /api/scan
+    // Immagine o PDF → /api/scan (prompt specifico per tipo)
     setStep('loading');
     try {
       const b64 = await fileToBase64(file);
@@ -76,11 +117,8 @@ export function ImportScanner({ onClose, onImported }) {
       });
       const data = await resp.json();
       if (!resp.ok) throw new Error(data?.error?.message || 'Estrazione non riuscita');
-      const mapped = (data.items || []).map(it => kind === 'menu'
-        ? { id: uid(), name: it.name || '', price: num(it.price), category: (it.category || '').toString().toUpperCase() }
-        : { id: uid(), name: it.name || '', price: num(it.price), unit: (it.unit || '').toString(), quantity: num(it.quantity) }
-      ).filter(x => x.name);
-      if (!mapped.length) { setError('Nessun dato riconosciuto nel documento.'); setStep('pick'); return; }
+      const mapped = mapScanned(data.items, kind);
+      if (!mapped.length) { setStep('empty'); return; }
       setRows(mapped);
       setStep('review');
     } catch (err) {
@@ -100,22 +138,29 @@ export function ImportScanner({ onClose, onImported }) {
       for (const r of rows) {
         if (!r.name?.trim()) continue;
         const price = num(r.price);
-        if (kind === 'menu') {
+        if (kind === 'dishes') {
           if (price === '' || price <= 0 || price > MAX_DISH_PRICE) continue;
           await saveToDB('dishes', {
             id: `dish_${uid()}`, name: r.name.trim(),
-            category: r.category || 'ANTIPASTO',
+            category: (r.category || 'ANTIPASTO').toUpperCase(),
             price, selling_price: price, food_cost: 0,
             components: [], isVisible: true,
             ingredientUpdatedAt: new Date().toISOString(),
             updated_at: new Date().toISOString(),
           });
-        } else {
+        } else if (kind === 'pantry') {
           if (price !== '' && (price < 0 || price > MAX_INGREDIENT_PRICE)) continue;
           await saveToDB('ingredients', {
             id: `ing_${uid()}`, name: r.name.trim(),
             unit: r.unit || 'kg', price: price || 0, price_per_unit: price || 0,
             waste: 0, _isPrep: false, updated_at: new Date().toISOString(),
+          });
+        } else { // fixed_costs
+          if (price === '' || price <= 0) continue;
+          await saveToDB('fixed_costs', {
+            id: `fc_${uid()}`, name: r.name.trim(),
+            type: 'Altro', amount_monthly: price, note: '',
+            updated_at: new Date().toISOString(),
           });
         }
         saved++;
@@ -132,7 +177,7 @@ export function ImportScanner({ onClose, onImported }) {
     <div className="modal-overlay" onClick={e => e.target === e.currentTarget && onClose()}>
       <div className="modal-box" style={{ maxWidth: 640, width: '100%' }}>
         <div className="modal-header">
-          <span className="modal-title">📷 Importa da documento</span>
+          <span className="modal-title">{cfg.title}</span>
           <button className="btn-icon" onClick={onClose}>✕</button>
         </div>
         <div className="modal-body">
@@ -144,17 +189,6 @@ export function ImportScanner({ onClose, onImported }) {
 
           {step === 'pick' && (
             <>
-              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginBottom: 12 }}>Cosa vuoi importare?</p>
-              <div style={{ display: 'flex', gap: 8, marginBottom: 16 }}>
-                {[{ id: 'menu', label: '🍽️ Menù (piatti)' }, { id: 'invoice', label: '🧾 Listino/Fattura (ingredienti)' }].map(opt => (
-                  <button key={opt.id} onClick={() => setKind(opt.id)} style={{
-                    flex: 1, padding: '10px', minHeight: 44, borderRadius: 8, fontSize: 13, fontWeight: 600, cursor: 'pointer',
-                    border: kind === opt.id ? '2px solid var(--gold)' : '1px solid var(--border-color)',
-                    background: kind === opt.id ? 'var(--gold-light)' : 'var(--bg-secondary)',
-                    color: kind === opt.id ? 'var(--gold-text)' : 'var(--text-muted)',
-                  }}>{opt.label}</button>
-                ))}
-              </div>
               <input
                 ref={fileRef}
                 type="file"
@@ -165,7 +199,12 @@ export function ImportScanner({ onClose, onImported }) {
               <button className="btn-primary" style={{ width: '100%', justifyContent: 'center', minHeight: 48 }} onClick={() => fileRef.current?.click()}>
                 📎 Scegli file o scatta una foto
               </button>
-              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 10, textAlign: 'center' }}>
+              <p style={{ fontSize: 13, color: 'var(--text-secondary)', marginTop: 12, textAlign: 'center' }}>
+                {kind === 'pantry'      && 'Estrarrò solo gli ingredienti/materie prime da una fattura o listino.'}
+                {kind === 'fixed_costs' && 'Estrarrò solo le voci di costo fisso mensile (affitto, utenze, personale…).'}
+                {kind === 'dishes'      && 'Estrarrò solo i piatti con il prezzo di vendita da un menù.'}
+              </p>
+              <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, textAlign: 'center' }}>
                 Accetta foto (JPG/PNG), PDF, Excel o CSV. Su telefono puoi scattare la foto al momento.
               </p>
             </>
@@ -175,6 +214,16 @@ export function ImportScanner({ onClose, onImported }) {
             <div style={{ textAlign: 'center', padding: '32px 0' }}>
               <div style={{ fontSize: 32, marginBottom: 10 }}>🔍</div>
               <p style={{ fontSize: 14, color: 'var(--text-secondary)' }}>Sto leggendo il documento…</p>
+            </div>
+          )}
+
+          {step === 'empty' && (
+            <div style={{ textAlign: 'center', padding: '24px 8px' }}>
+              <div style={{ fontSize: 32, marginBottom: 10 }}>🤔</div>
+              <p style={{ fontSize: 14, color: 'var(--text-secondary)', lineHeight: 1.5 }}>{cfg.emptyMsg}</p>
+              <button className="btn-secondary" style={{ marginTop: 16, minHeight: 44 }} onClick={() => { setRows([]); setError(null); setStep('pick'); }}>
+                Riprova con un altro file
+              </button>
             </div>
           )}
 
@@ -190,10 +239,8 @@ export function ImportScanner({ onClose, onImported }) {
                   <thead>
                     <tr style={{ textAlign: 'left', color: 'var(--text-muted)', fontSize: 11 }}>
                       <th style={{ padding: '6px 4px' }}>Nome</th>
-                      {kind === 'menu'
-                        ? <th style={{ padding: '6px 4px' }}>Categoria</th>
-                        : <th style={{ padding: '6px 4px' }}>Unità</th>}
-                      <th style={{ padding: '6px 4px', width: 80 }}>Prezzo €</th>
+                      {cfg.secondCol && <th style={{ padding: '6px 4px' }}>{cfg.secondCol.label}</th>}
+                      <th style={{ padding: '6px 4px', width: 96 }}>{cfg.priceLabel}</th>
                       <th style={{ width: 32 }}></th>
                     </tr>
                   </thead>
@@ -201,16 +248,18 @@ export function ImportScanner({ onClose, onImported }) {
                     {rows.map((r, i) => (
                       <tr key={r.id} style={{ borderTop: '1px solid var(--border-color)' }}>
                         <td style={{ padding: '4px' }}>
-                          <input className="form-input" value={r.name} onChange={e => updateRow(i, 'name', e.target.value)} style={{ padding: '6px 8px', fontSize: 13 }} />
+                          <input className="form-input" value={r.name} onChange={e => updateRow(i, 'name', e.target.value)} style={{ padding: '6px 8px', fontSize: 16 }} />
                         </td>
+                        {cfg.secondCol && (
+                          <td style={{ padding: '4px' }}>
+                            <input className="form-input" value={r[cfg.secondCol.key] || ''} onChange={e => updateRow(i, cfg.secondCol.key, e.target.value)} style={{ padding: '6px 8px', fontSize: 16 }} />
+                          </td>
+                        )}
                         <td style={{ padding: '4px' }}>
-                          <input className="form-input" value={kind === 'menu' ? r.category : r.unit} onChange={e => updateRow(i, kind === 'menu' ? 'category' : 'unit', e.target.value)} style={{ padding: '6px 8px', fontSize: 13 }} />
-                        </td>
-                        <td style={{ padding: '4px' }}>
-                          <input className="form-input" type="number" step="0.01" value={r.price} onChange={e => updateRow(i, 'price', e.target.value)} style={{ padding: '6px 8px', fontSize: 13, fontFamily: 'var(--font-mono)', textAlign: 'right' }} />
+                          <input className="form-input" type="number" step="0.01" value={r.price} onChange={e => updateRow(i, 'price', e.target.value)} style={{ padding: '6px 8px', fontSize: 16, fontFamily: 'var(--font-mono)', textAlign: 'right' }} />
                         </td>
                         <td style={{ textAlign: 'center' }}>
-                          <button className="btn-icon" onClick={() => removeRow(i)} style={{ color: 'var(--status-risk)' }}>🗑️</button>
+                          <button className="btn-icon" onClick={() => removeRow(i)} style={{ color: 'var(--status-risk)', minWidth: 44, minHeight: 44 }}>🗑️</button>
                         </td>
                       </tr>
                     ))}
@@ -231,8 +280,8 @@ export function ImportScanner({ onClose, onImported }) {
 
         {step === 'review' && (
           <div className="modal-footer">
-            <button className="btn-secondary" onClick={onClose}>Annulla</button>
-            <button className="btn-primary" onClick={handleConfirm} disabled={rows.length === 0}>
+            <button className="btn-secondary" onClick={onClose} style={{ minHeight: 44 }}>Annulla</button>
+            <button className="btn-primary" onClick={handleConfirm} disabled={rows.length === 0} style={{ minHeight: 44 }}>
               Conferma e importa {rows.length}
             </button>
           </div>

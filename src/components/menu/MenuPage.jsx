@@ -17,8 +17,6 @@ import { SectionHeader }   from '../foodcost/SectionHeader';
 import { FilterBar, applyFiltersAndSort } from '../foodcost/FilterBar';
 import { PriceSuggestion } from '../foodcost/PriceSuggestion';
 import { MAX_DISH_PRICE } from '../../lib/config';
-import { DemoBanner }      from '../demo/DemoBanner';
-import { DemoTour }        from '../demo/DemoTour';
 
 const uid  = () => Math.random().toString(36).slice(2, 10);
 const euro = n => '€' + (parseFloat(n) || 0).toFixed(2);
@@ -423,10 +421,10 @@ export function MenuPage({
   dishes, setDishes,
   ingredients, preparations,
   sections, setSections,
-  isDemoMode, handleResetDemo,
   recentlyUpdatedDishes,
   restaurant,
   onOpenScanner,
+  foodcostSection,
 }) {
   const [showAddModal,       setShowAddModal]       = useState(false);
   const [editingDish,        setEditingDish]        = useState(null);
@@ -444,23 +442,6 @@ export function MenuPage({
     const list = (sections && sections.length > 0) ? sections : FALLBACK_SECTIONS;
     return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, [sections]);
-
-  // ── ID del primo piatto rosso (per joyride demo) ─────────────────
-  const firstRedId = useMemo(() => {
-    if (!isDemoMode) return null;
-    for (const section of activeSections) {
-      const sectionDishes = (dishes || []).filter(d =>
-        (d.category || '').toUpperCase() === section.name.toUpperCase()
-      );
-      const red = sectionDishes.find(d => {
-        const sp = parseFloat(d.selling_price || d.price || 0);
-        const tc = parseFloat(d.totalCost || d.food_cost || 0);
-        return sp > 0 ? ((sp - tc) / sp) * 100 < 20 : false;
-      });
-      if (red) return red.id;
-    }
-    return null;
-  }, [isDemoMode, dishes, activeSections]);
 
   // ── DISH HANDLERS ────────────────────────────────────────────────
   const handleSaveDish = useCallback(saved => {
@@ -585,10 +566,7 @@ export function MenuPage({
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', background: 'var(--bg-primary)' }}>
 
       {/* TOP BAR */}
-      <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
-
-      {/* DEMO BANNER */}
-      {isDemoMode && <DemoBanner onReset={handleResetDemo} />}
+      <TopBar currentPage={currentPage} foodcostSection={foodcostSection} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
 
       {/* HEADER */}
       <div style={{ padding: '16px 20px 12px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border-color)' }}>
@@ -638,16 +616,28 @@ export function MenuPage({
             }}>✕</button>
           </div>
         ) : (
-          <button
-            onClick={() => setShowNewSection(true)}
-            style={{
-              width: '100%', padding: '9px', minHeight: 44,
-              background: 'none', border: '2px dashed var(--border-color)',
-              borderRadius: 8, color: 'var(--text-muted)',
-              fontWeight: 600, fontSize: 13, cursor: 'pointer',
-            }}>
-            + Aggiungi Sezione
-          </button>
+          <div style={{ display: 'flex', gap: 8 }}>
+            <button
+              onClick={() => setShowNewSection(true)}
+              style={{
+                flex: 1, padding: '9px', minHeight: 44,
+                background: 'none', border: '2px dashed var(--border-color)',
+                borderRadius: 8, color: 'var(--text-muted)',
+                fontWeight: 600, fontSize: 13, cursor: 'pointer',
+              }}>
+              + Aggiungi Sezione
+            </button>
+            <button
+              onClick={() => onOpenScanner?.('dishes')}
+              style={{
+                padding: '9px 16px', minHeight: 44,
+                background: 'none', border: '1px solid var(--border-color)',
+                borderRadius: 8, color: 'var(--text-secondary)',
+                fontWeight: 600, fontSize: 13, cursor: 'pointer', whiteSpace: 'nowrap',
+              }}>
+              📷 Importa piatti
+            </button>
+          </div>
         )}
       </div>
 
@@ -668,17 +658,11 @@ export function MenuPage({
             }}>
               ➕ Aggiungi il primo piatto
             </button>
-            <button onClick={handleResetDemo} style={{
+            <button onClick={() => onOpenScanner?.('dishes')} style={{
               padding: '12px 16px', minHeight: 48, background: 'none', color: 'var(--gold)',
               border: '1px solid var(--gold)', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
             }}>
-              🎬 Carica dati demo
-            </button>
-            <button onClick={() => onOpenScanner?.()} style={{
-              padding: '12px 16px', minHeight: 48, background: 'none', color: 'var(--gold)',
-              border: '1px solid var(--gold)', borderRadius: 10, fontSize: 14, fontWeight: 600, cursor: 'pointer',
-            }}>
-              📷 Scansiona il menù
+              📷 Scansiona un menù
             </button>
           </div>
         </div>
@@ -732,7 +716,6 @@ export function MenuPage({
                     onDuplicate={() => handleDuplicateDish(dish)}
                     onToggleVisible={() => handleToggleVisible(dish)}
                     onDelete={() => requestDeleteDish(dish.id, dish.name)}
-                    isFirstRedDemo={isDemoMode && dish.id === firstRedId}
                     flashKey={(recentlyUpdatedDishes || []).find(e => e.id === dish.id)?.ts || null}
                   />
                 ))
@@ -789,9 +772,6 @@ export function MenuPage({
           onClose={() => setDeleteDishModal(null)}
         />
       )}
-
-      {/* DEMO TOUR */}
-      {isDemoMode && <DemoTour hasData={(dishes || []).length > 0} />}
 
       <style>{`
         @keyframes productCardFlash {

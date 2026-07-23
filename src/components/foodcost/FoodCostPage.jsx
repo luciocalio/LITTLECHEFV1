@@ -508,8 +508,14 @@ export function FoodCostPage({
   estimatedRevenue       = 0,
   onEstimatedRevenueChange,
   restaurant,
+  onOpenScanner,
+  foodcostSection = 'dispensa',
+  onFoodcostSection,
 }) {
-  const [section,      setSection]      = useState('dispensa');
+  // Segmento controllato dalla nav superiore (con fallback interno)
+  const [sectionLocal, setSectionLocal] = useState('dispensa');
+  const section = foodcostSection || sectionLocal;
+  const setSection = onFoodcostSection || setSectionLocal;
   const [searchQuery,  setSearchQuery]  = useState('');
   const [showIngModal,        setShowIngModal]        = useState(false);
   const [showPrepModal,       setShowPrepModal]       = useState(false);
@@ -600,7 +606,7 @@ export function FoodCostPage({
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', background: 'var(--bg-primary)' }}>
 
       {/* TOP BAR */}
-      <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
+      <TopBar currentPage={currentPage} foodcostSection={section} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
 
       {/* HEADER + SEGMENTED CONTROL */}
       <div style={{
@@ -654,7 +660,7 @@ export function FoodCostPage({
             width: '100%', padding: '10px 16px',
             border: '1px solid var(--border-color)', borderRadius: '10px',
             background: 'var(--bg-card)', color: 'var(--text-primary)',
-            fontSize: '14px', minHeight: '44px', outline: 'none', boxSizing: 'border-box',
+            fontSize: '16px', minHeight: '44px', outline: 'none', boxSizing: 'border-box',
           }}
         />
       </div>
@@ -687,6 +693,17 @@ export function FoodCostPage({
                 }}
               >
                 + Preparazione
+              </button>
+              <button
+                onClick={() => onOpenScanner?.('pantry')}
+                style={{
+                  padding: '10px 16px', minHeight: '44px',
+                  background: 'none', color: 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)', borderRadius: '8px',
+                  fontWeight: '600', fontSize: '14px', cursor: 'pointer',
+                }}
+              >
+                📷 Importa
               </button>
             </div>
 
@@ -778,11 +795,11 @@ export function FoodCostPage({
             )}
 
             {filteredIngredients.length === 0 && filteredPreparations.length === 0 && (
-              <div className="empty-state">
+              <div className="empty-state" style={{ lineHeight: 1.6 }}>
                 <div className="empty-state-icon">{searchQuery ? '🔍' : '🧺'}</div>
                 {searchQuery
                   ? `Nessun risultato per "${searchQuery}"`
-                  : 'Aggiungi il primo ingrediente con il pulsante qui sopra'}
+                  : <>La tua dispensa è vuota.<br />Aggiungi il primo ingrediente con <strong>+ Ingrediente</strong>,<br />oppure importa una fattura o un listino con <strong>📷 Importa</strong>.</>}
               </div>
             )}
           </>
@@ -823,6 +840,17 @@ export function FoodCostPage({
               >
                 + Aggiungi Costo Fisso
               </button>
+              <button
+                onClick={() => onOpenScanner?.('fixed_costs')}
+                style={{
+                  padding: '12px 16px', minHeight: '44px',
+                  background: 'none', color: 'var(--text-secondary)',
+                  border: '1px solid var(--border-color)', borderRadius: '8px',
+                  fontWeight: '600', fontSize: '14px', cursor: 'pointer', whiteSpace: 'nowrap',
+                }}
+              >
+                📷 Importa
+              </button>
             </div>
 
             {filteredFixed.map(cost => (
@@ -855,11 +883,11 @@ export function FoodCostPage({
             ))}
 
             {filteredFixed.length === 0 && (
-              <div className="empty-state">
+              <div className="empty-state" style={{ lineHeight: 1.6 }}>
                 <div className="empty-state-icon">{searchQuery ? '🔍' : '💶'}</div>
                 {searchQuery
                   ? `Nessun risultato per "${searchQuery}"`
-                  : 'Nessun costo fisso. Aggiungili per calcolare il break-even.'}
+                  : <>Nessun costo fisso ancora.<br />Aggiungine uno con <strong>+ Aggiungi Costo Fisso</strong>,<br />oppure importa una fattura con <strong>📷 Importa</strong>.</>}
               </div>
             )}
 

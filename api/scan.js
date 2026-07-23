@@ -2,21 +2,36 @@
 //  LITTLECHEF · /api/scan — estrazione dati da documenti
 //  Riceve un file (immagine o PDF) in base64 e chiede a Claude
 //  un'estrazione strutturata JSON. Chiave Anthropic SOLO lato server.
-//    kind='menu'    → { items: [{ name, price, category }] }
-//    kind='invoice' → { items: [{ name, quantity, unit, price }] }
+//  Il prompt è SPECIFICO per il tipo di destinazione: estrae solo
+//  quelle entità e ignora il resto del documento.
+//    kind='dishes'      → { items: [{ name, price, category }] }
+//    kind='pantry'      → { items: [{ name, quantity, unit, price }] }
+//    kind='fixed_costs' → { items: [{ name, amount }] }
 // ══════════════════════════════════════════════════════════════
 
 const PROMPTS = {
-  menu:
-    'Analizza questo MENU di ristorante ed estrai ogni piatto. ' +
+  dishes:
+    'Questo documento può essere un menù, una lista o altro. Estrai SOLO i PIATTI/PRODOTTI DEL MENÙ con il loro prezzo di vendita. ' +
+    'IGNORA completamente ingredienti di magazzino, voci di costo, fatture fornitori: NON sono piatti. ' +
     'Rispondi SOLO con JSON valido, nessun altro testo, nel formato: ' +
     '{"items":[{"name":"nome piatto","price":numero,"category":"ANTIPASTO|PRIMO|SECONDO|DOLCE|BEVANDE o vuoto"}]}. ' +
-    'Il prezzo è un numero (es. 12.50), senza simbolo €. Se un prezzo non è leggibile usa null.',
-  invoice:
-    'Analizza questa FATTURA o LISTINO fornitore ed estrai ogni ingrediente/prodotto. ' +
+    'Il prezzo è un numero (es. 12.50), senza simbolo €. Se un prezzo non è leggibile usa null. ' +
+    'Se nel documento non ci sono piatti di menù, rispondi {"items":[]}.',
+  pantry:
+    'Questo documento può essere una fattura, un listino fornitore, una lista o altro. Estrai SOLO gli INGREDIENTI / MATERIE PRIME di magazzino con il prezzo per unità. ' +
+    'IGNORA completamente i piatti del menù e le voci di costo fisso (affitto, utenze, personale): NON sono ingredienti. ' +
     'Rispondi SOLO con JSON valido, nessun altro testo, nel formato: ' +
     '{"items":[{"name":"nome ingrediente","quantity":numero o null,"unit":"kg|g|L|ml|pz o vuoto","price":numero}]}. ' +
-    'Il prezzo è un numero per unità (es. 8.50), senza simbolo €. Se un valore non è leggibile usa null.',
+    'Il prezzo è un numero per unità (es. 8.50), senza simbolo €. Se un valore non è leggibile usa null. ' +
+    'Se nel documento non ci sono ingredienti, rispondi {"items":[]}.',
+  fixed_costs:
+    'Questo documento può essere una fattura, un estratto conto, una lista di spese o altro. Estrai SOLO le VOCI DI COSTO FISSO mensile ' +
+    '(es. affitto, utenze luce/gas/acqua, personale/stipendi, software, assicurazione, commercialista, manutenzione, TARI, telefono/internet, marketing). ' +
+    'IGNORA completamente i piatti del menù e gli ingredienti/materie prime: NON sono costi fissi. ' +
+    'Rispondi SOLO con JSON valido, nessun altro testo, nel formato: ' +
+    '{"items":[{"name":"nome voce di costo","amount":numero}]}. ' +
+    'L\'importo è il costo mensile come numero (es. 2000), senza simbolo €. Se un valore non è leggibile usa null. ' +
+    'Se nel documento non ci sono voci di costo fisso, rispondi {"items":[]}.',
 };
 
 export default async function handler(req, res) {

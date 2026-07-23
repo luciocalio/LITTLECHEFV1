@@ -168,7 +168,7 @@ export function AuthPage({ onAuthed, onRegistered }) {
                   width: '100%', padding: '11px 14px', boxSizing: 'border-box',
                   border: '1px solid var(--border-color)', borderRadius: 10,
                   background: 'var(--bg-input)', color: 'var(--text-primary)',
-                  fontSize: 14, outline: 'none', minHeight: 44,
+                  fontSize: 16, outline: 'none', minHeight: 44,
                 }}
               />
             </div>
@@ -189,7 +189,7 @@ export function AuthPage({ onAuthed, onRegistered }) {
                 width: '100%', padding: '11px 14px', boxSizing: 'border-box',
                 border: '1px solid var(--border-color)', borderRadius: 10,
                 background: 'var(--bg-input)', color: 'var(--text-primary)',
-                fontSize: 14, outline: 'none', minHeight: 44,
+                fontSize: 16, outline: 'none', minHeight: 44,
               }}
             />
           </div>
@@ -211,7 +211,7 @@ export function AuthPage({ onAuthed, onRegistered }) {
                 width: '100%', padding: '11px 14px', boxSizing: 'border-box',
                 border: '1px solid var(--border-color)', borderRadius: 10,
                 background: 'var(--bg-input)', color: 'var(--text-primary)',
-                fontSize: 14, outline: 'none', minHeight: 44,
+                fontSize: 16, outline: 'none', minHeight: 44,
               }}
             />
             {mode === 'login' && (
