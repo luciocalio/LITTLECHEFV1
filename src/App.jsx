@@ -3,9 +3,10 @@ import { useState, useEffect, useMemo, useCallback } from 'react';
 import { supabase, getMyRestaurant } from './lib/supabase.js';
 import { AuthPage }      from './components/auth/AuthPage.jsx';
 import { ResetPassword } from './components/auth/ResetPassword.jsx';
-import { ChatPage }      from './components/chat/ChatPage.jsx';
-import { FoodCostPage }  from './components/foodcost/FoodCostPage.jsx';
-import { MenuPage }      from './components/menu/MenuPage.jsx';
+import { ChatPage }        from './components/chat/ChatPage.jsx';
+import { PantryPage }      from './pages/PantryPage.jsx';
+import { FixedCostsPage }  from './pages/FixedCostsPage.jsx';
+import { MenuPage }        from './components/menu/MenuPage.jsx';
 import { SettingsModal } from './components/settings/SettingsModal.jsx';
 import { ImportScanner } from './components/import/ImportScanner.jsx';
 import {
@@ -62,7 +63,6 @@ export default function App() {
   }, [session, restaurant]);
 
   const [currentPage,       setCurrentPage]       = useState('chat');
-  const [foodcostSection,   setFoodcostSection]    = useState('dispensa'); // segmento Food Cost controllato dalla nav
   const [showSettings,      setShowSettings]       = useState(false);
   const [scannerKind,       setScannerKind]        = useState(null); // 'pantry'|'fixed_costs'|'dishes' o null
   const [ingredients,       setIngredients]        = useState([]);
@@ -194,12 +194,7 @@ export default function App() {
     onDishUpdated: handleDishUpdated,
     restaurant,
     currentPage,
-    foodcostSection,
-    onFoodcostSection: setFoodcostSection,
-    onNavigate: (page, section) => {
-      setCurrentPage(page);
-      if (page === 'foodcost' && section) setFoodcostSection(section);
-    },
+    onNavigate: setCurrentPage,
     onOpenSettings: () => setShowSettings(true),
     onOpenScanner:  (kind) => setScannerKind(kind), // apre lo scanner col tipo della sezione
   };
@@ -283,9 +278,10 @@ export default function App() {
 
   return (
     <div style={{ minHeight: '100dvh', background: 'var(--bg-primary)', color: 'var(--text-primary)' }}>
-      {currentPage === 'chat'     && <ChatPage     {...sharedProps} />}
-      {currentPage === 'foodcost' && <FoodCostPage {...sharedProps} />}
-      {currentPage === 'menu'     && <MenuPage     {...sharedProps} />}
+      {currentPage === 'chat'       && <ChatPage       {...sharedProps} />}
+      {currentPage === 'pantry'     && <PantryPage     {...sharedProps} />}
+      {currentPage === 'fixedcosts' && <FixedCostsPage {...sharedProps} />}
+      {currentPage === 'menu'       && <MenuPage       {...sharedProps} />}
 
       {showSettings && (
         <SettingsModal

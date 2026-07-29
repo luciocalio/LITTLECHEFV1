@@ -17,6 +17,7 @@ import { SectionHeader }   from '../foodcost/SectionHeader';
 import { FilterBar, applyFiltersAndSort } from '../foodcost/FilterBar';
 import { PriceSuggestion } from '../foodcost/PriceSuggestion';
 import { MAX_DISH_PRICE } from '../../lib/config';
+import { toNum } from '../../lib/num';
 
 const uid  = () => Math.random().toString(36).slice(2, 10);
 const euro = n => '€' + (parseFloat(n) || 0).toFixed(2);
@@ -119,20 +120,20 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
   ].filter(opt => !searchComp || opt.label.toLowerCase().includes(searchComp.toLowerCase())), [allIngredients, allPreparations, searchComp]);
 
   const computeCompCost = useCallback(comp => {
-    if (!comp.id_ref || !(parseFloat(comp.qty) > 0)) return 0;
+    if (!comp.id_ref || !(toNum(comp.qty) > 0)) return 0;
     const item = pantryMap[comp.id_ref];
     if (!item) return 0;
     if (item._isPrep) {
-      try { return calcPreparationInDish(item, parseFloat(comp.qty) || 0, comp.unit || item.unit); }
+      try { return calcPreparationInDish(item, toNum(comp.qty), comp.unit || item.unit); }
       catch { return 0; }
     }
-    return calcIngredientCost(item, parseFloat(comp.qty) || 0, comp.unit || item.unit);
+    return calcIngredientCost(item, toNum(comp.qty), comp.unit || item.unit);
   }, [pantryMap]);
 
   const autoCost = useMemo(() => {
     const compsForCalc = components
       .filter(c => c.id_ref)
-      .map(c => ({ type: c.type, id: c.id_ref, quantity: parseFloat(c.qty) || 0, unit: c.unit }));
+      .map(c => ({ type: c.type, id: c.id_ref, quantity: toNum(c.qty), unit: c.unit }));
     return calcDishFoodCost(compsForCalc, allIngredients || [], allPreparations || []);
   }, [components, allIngredients, allPreparations]);
 
@@ -146,19 +147,23 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
   }, [components, allIngredients, allPreparations]);
 
   const addComp = opt => {
-    setComponents(prev => [...prev, {
-      id: uid(), type: opt.type, id_ref: opt.id,
-      name: opt.name, qty: 1, unit: opt.unit || 'g',
-    }]);
+    // Guard anti-duplicato: se l'ingrediente/preparazione è già in lista
+    // (es. doppio click rapido sullo stesso risultato) non aggiungere una
+    // seconda riga. Update funzionale sullo stato più recente.
+    setComponents(prev => {
+      if (prev.some(c => c.id_ref === opt.id)) return prev;
+      return [...prev, {
+        id: uid(), type: opt.type, id_ref: opt.id,
+        name: opt.name, qty: '', unit: opt.unit || 'g', // qty vuota: mai un default plausibile come 1kg
+      }];
+    });
     setSearchComp('');
   };
 
   const updateComp = (i, field, val) => {
-    setComponents(prev => prev.map((c, idx) => {
-      if (idx !== i) return c;
-      if (field === 'qty') return { ...c, qty: parseFloat(val) || 0 };
-      return { ...c, [field]: val };
-    }));
+    // La quantità resta la STRINGA grezza digitata (permette "0.03", "0,03",
+    // "0." intermedio): il parse robusto avviene solo al calcolo/salvataggio.
+    setComponents(prev => prev.map((c, idx) => idx === i ? { ...c, [field]: val } : c));
   };
 
   const removeComp = i => setComponents(prev => prev.filter((_, idx) => idx !== i));
@@ -168,11 +173,11 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
     if (priceNum <= 0) { setError('Il prezzo di vendita deve essere > 0.'); return; }
     if (priceNum > MAX_DISH_PRICE) { setError(`Prezzo troppo alto: massimo ${MAX_DISH_PRICE} € per piatto.`); return; }
 
-    const cleanComps = components.filter(c => c.id_ref && parseFloat(c.qty) > 0);
+    const cleanComps = components.filter(c => c.id_ref && toNum(c.qty) > 0);
     const calculatedFoodCost = useManualCost
-      ? (parseFloat(manualCost) || 0)
+      ? toNum(manualCost)
       : calcDishFoodCost(
-          cleanComps.map(c => ({ type: c.type, id: c.id_ref, quantity: parseFloat(c.qty) || 0, unit: c.unit })),
+          cleanComps.map(c => ({ type: c.type, id: c.id_ref, quantity: toNum(c.qty), unit: c.unit })),
           allIngredients || [], allPreparations || []
         );
 
@@ -194,8 +199,8 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
       ingredientUpdatedAt: new Date().toISOString(),
       components:     cleanComps.map(c => ({
         id: c.id, type: c.type, id_ref: c.id_ref,
-        name: c.name, qty: parseFloat(c.qty) || 0,
-        quantity: parseFloat(c.qty) || 0, unit: c.unit,
+        name: c.name, qty: toNum(c.qty),
+        quantity: toNum(c.qty), unit: c.unit,
       })),
       updated_at: new Date().toISOString(),
     };
@@ -304,10 +309,10 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
                     {comp.name}{item?._isPrep ? ' ★' : ''}
                   </span>
                   <input
-                    type="number" min="0" step="0.1" className="form-input"
-                    value={comp.qty || ''}
-                    onChange={e => updateComp(actualIdx, 'qty', parseFloat(e.target.value) || 0)}
-                    placeholder="0"
+                    type="text" inputMode="decimal" className="form-input"
+                    value={comp.qty ?? ''}
+                    onChange={e => updateComp(actualIdx, 'qty', e.target.value)}
+                    placeholder="es. 150"
                     style={{ padding: '7px 10px', fontFamily: 'var(--font-mono)', textAlign: 'right' }}
                   />
                   <UnitSelect
@@ -424,7 +429,6 @@ export function MenuPage({
   recentlyUpdatedDishes,
   restaurant,
   onOpenScanner,
-  foodcostSection,
 }) {
   const [showAddModal,       setShowAddModal]       = useState(false);
   const [editingDish,        setEditingDish]        = useState(null);
@@ -566,7 +570,7 @@ export function MenuPage({
     <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', background: 'var(--bg-primary)' }}>
 
       {/* TOP BAR */}
-      <TopBar currentPage={currentPage} foodcostSection={foodcostSection} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
+      <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
 
       {/* HEADER */}
       <div style={{ padding: '16px 20px 12px', background: 'var(--bg-card)', borderBottom: '1px solid var(--border-color)' }}>

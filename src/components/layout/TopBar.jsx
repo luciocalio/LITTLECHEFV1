@@ -5,17 +5,14 @@
 // voci non entrano — nessun hamburger che nasconde le sezioni.
 
 const NAV = [
-  { id: 'chat',     icon: '💬', label: 'Chat',        page: 'chat' },
-  { id: 'dispensa', icon: '🧺', label: 'Dispensa',    page: 'foodcost', section: 'dispensa' },
-  { id: 'fissi',    icon: '💶', label: 'Costi Fissi', page: 'foodcost', section: 'fissi' },
-  { id: 'menu',     icon: '📋', label: 'Prodotti',    page: 'menu' },
+  { id: 'chat',       icon: '💬', label: 'Chat',        page: 'chat' },
+  { id: 'pantry',     icon: '🧺', label: 'Dispensa',    page: 'pantry' },
+  { id: 'fixedcosts', icon: '💶', label: 'Costi Fissi', page: 'fixedcosts' },
+  { id: 'menu',       icon: '📋', label: 'Prodotti',    page: 'menu' },
 ];
 
-export function TopBar({ currentPage, foodcostSection = 'dispensa', onNavigate, onOpenSettings, restaurant }) {
-  const isActive = item => {
-    if (item.page === 'foodcost') return currentPage === 'foodcost' && foodcostSection === item.section;
-    return currentPage === item.page;
-  };
+export function TopBar({ currentPage, onNavigate, onOpenSettings, restaurant }) {
+  const isActive = item => currentPage === item.page;
 
   return (
     <div style={{
@@ -50,7 +47,7 @@ export function TopBar({ currentPage, foodcostSection = 'dispensa', onNavigate, 
           return (
             <button
               key={item.id}
-              onClick={() => onNavigate(item.page, item.section)}
+              onClick={() => onNavigate(item.page)}
               aria-current={active ? 'page' : undefined}
               style={{
                 flex: '1 0 auto', minWidth: 60,

@@ -43,7 +43,6 @@ export function ChatPage({
   fixedCostRatio = 0,
   restaurant,
   onDishUpdated,
-  foodcostSection,
 }) {
   const restaurantName = restaurant?.name ||
     localStorage.getItem('lc-restaurant-name') ||
@@ -68,7 +67,11 @@ export function ChatPage({
       })),
       dishes: (dishes || []).slice(0, 20).map(d => ({
         id: d.id, name: d.name, selling_price: d.selling_price,
-        food_cost: d.food_cost, status: d.status, category: d.category
+        food_cost: d.food_cost, status: d.status, category: d.category,
+        // margini derivati già calcolati da App (dishesWithFixed): così il
+        // Sous Chef cita numeri coerenti fin dalla prima risposta (fix 1D)
+        marginPct: d.marginPct != null ? Number(d.marginPct).toFixed(1) : undefined,
+        grossMarginEuro: d.grossMargin != null ? Number(d.grossMargin).toFixed(2) : undefined,
       })),
       fixedCosts: (fixedCosts || []).slice(0, 10).map(c => ({
         id: c.id, name: c.name, amount_monthly: c.amount_monthly
@@ -257,9 +260,12 @@ QUANDO L'UTENTE CHIEDE:
 1. "Quali piatti sono critici?" o "Margini bassi?" → usa get_critical_dishes
 2. "Dettagli di [piatto]?" → usa get_dish_details
 3. "Aumenta prezzo di [piatto]?" → usa update_dish_price
-4. "Quale piatto guadagna più?" → usa get_most_profitable_dish
+4. "Quale piatto è più redditizio?" → usa get_most_profitable_dish e riporta ESPLICITAMENTE ENTRAMBE le metriche: il piatto con margine PERCENTUALE più alto E il piatto con GUADAGNO ASSOLUTO in € per porzione più alto. Se sono piatti diversi, chiariscilo (un margine % alto può valere pochi centesimi se il piatto costa poco).
 5. SEMPRE rispondi in italiano con spiegazione, mai solo numeri
-6. NON usare markdown — testo plain, ben formattato`;
+
+REGOLA SUI NUMERI (fondamentale): quando citi un numero (margine, prezzo, food cost, guadagno) usa SEMPRE il valore restituito dall'ultimo tool o dai DATI ATTUALI qui sopra, MAI un valore che avevi menzionato prima nella conversazione. Se in questo turno hai appena modificato un prezzo con update_dish_price, usa i nuovi valori restituiti dal tool, non quelli vecchi.
+
+FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiave e elenchi puntati con "- ". Niente tabelle o intestazioni #.`;
 
       const tools = [
         {
@@ -290,7 +296,7 @@ QUANDO L'UTENTE CHIEDE:
         },
         {
           name: 'get_most_profitable_dish',
-          description: 'Piatto con il margine percentuale più alto.',
+          description: 'Restituisce DUE piatti: quello con margine percentuale più alto e quello con guadagno assoluto (€/porzione) più alto. Usalo per rispondere "qual è il piatto più redditizio" mostrando entrambe le metriche.',
           input_schema: { type: 'object', properties: {}, required: [] },
         },
       ];
@@ -300,9 +306,18 @@ QUANDO L'UTENTE CHIEDE:
       // evita che chiamate multiple nello stesso turno (es. update_dish_price
       // eseguite in parallelo da Promise.all) si basino sulla stessa
       // fotografia iniziale e si sovrascrivano a vicenda.
+      // I margini (marginPct, grossMargin, totalCost, fixedCostOnDish) sono
+      // campi DERIVATI e NON salvati nel DB: vanno ricalcolati sui dati freschi,
+      // altrimenti risulterebbero sempre 0 e i numeri citati dal Sous Chef
+      // sarebbero incoerenti (fix 1D). Stessa formula usata da update_dish_price.
+      const enrichDish = d => {
+        const price = d.selling_price || d.price || 0;
+        return { ...d, ...calcDishWithFixedCosts(d.food_cost || 0, price, fixedCostRatio) };
+      };
+
       const executeTool = async (toolName, toolInput) => {
         if (toolName === 'get_critical_dishes') {
-          const freshDishes = await getAllFromDB('dishes');
+          const freshDishes = (await getAllFromDB('dishes')).map(enrichDish);
           const critical = freshDishes.filter(d => (d.marginPct || 0) < 20);
           return JSON.stringify({
             count: critical.length,
@@ -315,7 +330,7 @@ QUANDO L'UTENTE CHIEDE:
           });
         }
         if (toolName === 'get_dish_details') {
-          const freshDishes = await getAllFromDB('dishes');
+          const freshDishes = (await getAllFromDB('dishes')).map(enrichDish);
           const dish = freshDishes.find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
           if (!dish) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
           return JSON.stringify({
@@ -336,9 +351,10 @@ QUANDO L'UTENTE CHIEDE:
 
           // (a) Lettura FRESCA del singolo piatto direttamente da IndexedDB,
           // in questo preciso momento — mai dalla variabile `dishes` esterna.
-          const freshDishes = await getAllFromDB('dishes');
-          const dish = freshDishes.find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
-          if (!dish) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
+          const freshRaw = await getAllFromDB('dishes');
+          const rawDish = freshRaw.find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
+          if (!rawDish) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
+          const dish = enrichDish(rawDish); // margine vecchio calcolato, non da campo inesistente
 
           const oldPrice = dish.selling_price || dish.price;
           const oldMarginPct = dish.marginPct;
@@ -386,15 +402,27 @@ QUANDO L'UTENTE CHIEDE:
           });
         }
         if (toolName === 'get_most_profitable_dish') {
-          const freshDishes = await getAllFromDB('dishes');
-          const profitable = [...freshDishes].sort((a, b) => (b.marginPct || 0) - (a.marginPct || 0))[0];
-          if (!profitable) return JSON.stringify({ error: 'Nessun piatto trovato' });
+          const freshDishes = (await getAllFromDB('dishes')).map(enrichDish);
+          if (!freshDishes.length) return JSON.stringify({ error: 'Nessun piatto trovato' });
+          // Due metriche diverse (fix TIER 4): margine % più alto E guadagno
+          // assoluto €/porzione più alto — possono essere piatti diversi.
+          const byPct = [...freshDishes].sort((a, b) => (b.marginPct || 0) - (a.marginPct || 0))[0];
+          const byEuro = [...freshDishes].sort((a, b) => (b.grossMargin || 0) - (a.grossMargin || 0))[0];
           return JSON.stringify({
-            name: profitable.name,
-            price: profitable.selling_price || profitable.price,
-            foodCost: profitable.food_cost,
-            marginPct: (profitable.marginPct || 0).toFixed(1),
-            marginEuro: (profitable.grossMargin || 0).toFixed(2),
+            note: 'Esistono due definizioni di "più redditizio": margine percentuale e guadagno assoluto per porzione. Riportale entrambe distinguendole.',
+            highestMarginPct: {
+              name: byPct.name,
+              marginPct: (byPct.marginPct || 0).toFixed(1),
+              grossMarginEuro: (byPct.grossMargin || 0).toFixed(2),
+              price: byPct.selling_price || byPct.price,
+            },
+            highestAbsoluteProfit: {
+              name: byEuro.name,
+              grossMarginEuro: (byEuro.grossMargin || 0).toFixed(2),
+              marginPct: (byEuro.marginPct || 0).toFixed(1),
+              price: byEuro.selling_price || byEuro.price,
+            },
+            sameDish: byPct.name === byEuro.name,
           });
         }
         return JSON.stringify({ error: `Tool "${toolName}" sconosciuto` });
@@ -492,7 +520,6 @@ QUANDO L'UTENTE CHIEDE:
       {/* TOP BAR */}
       <TopBar
         currentPage={currentPage}
-        foodcostSection={foodcostSection}
         onNavigate={onNavigate}
         onOpenSettings={onOpenSettings}
         restaurant={restaurant}
