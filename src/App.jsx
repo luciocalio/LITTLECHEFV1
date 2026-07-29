@@ -45,6 +45,7 @@ export default function App() {
         clearRestaurantCache();
         setIngredients([]); setPreparations([]); setDishes([]);
         setFixedCosts([]); setSections([]); setEstimatedRevenue(0);
+        setChatMessages([]); // 2C: la cronologia chat si svuota solo al logout
       }
     });
     return () => sub.subscription.unsubscribe();
@@ -73,68 +74,75 @@ export default function App() {
   const [sections,          setSections]           = useState([]);
   const [isSeeding,         setIsSeeding]          = useState(false);
   const [recentlyUpdatedDishes, setRecentlyUpdatedDishes] = useState([]); // [{id, ts}] — per flash visivo su Prodotti dopo update da chat
+  const [toast,             setToast]              = useState(null); // conferma non bloccante (es. "5 elementi importati")
+  const [chatMessages,      setChatMessages]        = useState([]);  // 2C: cronologia Sous Chef a livello app (sopravvive al cambio sezione)
+
+  const showToast = useCallback(msg => {
+    setToast(msg);
+    setTimeout(() => setToast(t => (t === msg ? null : t)), 3500);
+  }, []);
 
   // 6B: NESSUN seeding automatico di dati demo. Ogni account nuovo parte
   // vuoto. La demo si carica SOLO dal bottone in Settings, visibile al solo
   // account proprietario (OWNER_EMAIL) — vedi SettingsModal.
 
-  // Carica i dati del ristorante loggato da Supabase (gate su restaurant)
-  useEffect(() => {
+  // Ricarica i dati del ristorante da Supabase e aggiorna lo stato.
+  // Richiamabile SENZA ricaricare la pagina (fix 2A: dopo import/salvataggi
+  // restiamo nella sezione corrente invece di ripartire dal login).
+  const reloadData = useCallback(async () => {
     if (!restaurant) return;
-    async function loadAll() {
-      try {
-        const [rawIng, rawPrep, rawDishes, rawFixed, rawSections] = await Promise.all([
-          getAllFromDB('ingredients'),
-          getAllFromDB('preparations'),
-          getAllFromDB('dishes'),
-          getAllFromDB('fixed_costs'),
-          getAllFromDB('sections'),
-        ]);
+    try {
+      const [rawIng, rawPrep, rawDishes, rawFixed, rawSections] = await Promise.all([
+        getAllFromDB('ingredients'),
+        getAllFromDB('preparations'),
+        getAllFromDB('dishes'),
+        getAllFromDB('fixed_costs'),
+        getAllFromDB('sections'),
+      ]);
 
-        const ings  = rawIng   || [];
-        const preps = rawPrep  || [];
-        const fixed = rawFixed || [];
-        const rawD  = rawDishes || [];
-        const savedRevenue = restaurant.estimated_monthly_revenue ?? 0;
+      const ings  = rawIng   || [];
+      const preps = rawPrep  || [];
+      const fixed = rawFixed || [];
+      const rawD  = rawDishes || [];
+      const savedRevenue = restaurant.estimated_monthly_revenue ?? 0;
 
-        const dishs = rawD.map(d => {
-          const comps = (d.components || []).filter(c => c.id_ref || c.id);
-          if (comps.length > 0) {
-            const mapped = comps.map(c => ({
-              type:     c.type,
-              id:       c.id_ref || c.id,
-              quantity: parseFloat(c.qty ?? c.quantity) || 0,
-              unit:     c.unit,
-            }));
-            const fc = calcDishFoodCost(mapped, ings, preps);
-            const { marginEuro, marginPct, status } = calcMargin(d.selling_price || d.price, fc);
-            return { ...d, food_cost: fc, margin_euro: marginEuro, margin_pct: marginPct, status };
-          }
-          const fc = parseFloat(d.food_cost) || 0;
+      const dishs = rawD.map(d => {
+        const comps = (d.components || []).filter(c => c.id_ref || c.id);
+        if (comps.length > 0) {
+          const mapped = comps.map(c => ({
+            type:     c.type,
+            id:       c.id_ref || c.id,
+            quantity: parseFloat(c.qty ?? c.quantity) || 0,
+            unit:     c.unit,
+          }));
+          const fc = calcDishFoodCost(mapped, ings, preps);
           const { marginEuro, marginPct, status } = calcMargin(d.selling_price || d.price, fc);
           return { ...d, food_cost: fc, margin_euro: marginEuro, margin_pct: marginPct, status };
-        });
-
-        // Seed sections se primo avvio — id unici per ristorante
-        // (la PK è globale: usare id fissi farebbe collidere ristoranti diversi)
-        let secs = rawSections || [];
-        if (secs.length === 0) {
-          secs = DEFAULT_SECTIONS.map(s => ({ ...s, id: `${restaurant.id}_${s.id}` }));
-          await Promise.all(secs.map(s => saveToDB('sections', s)));
         }
+        const fc = parseFloat(d.food_cost) || 0;
+        const { marginEuro, marginPct, status } = calcMargin(d.selling_price || d.price, fc);
+        return { ...d, food_cost: fc, margin_euro: marginEuro, margin_pct: marginPct, status };
+      });
 
-        setIngredients(ings);
-        setPreparations(preps);
-        setDishes(dishs);
-        setFixedCosts(fixed);
-        setEstimatedRevenue(parseFloat(savedRevenue) || 0);
-        setSections(secs);
-      } catch (err) {
-        console.error('[App] Errore caricamento dati:', err);
+      // Seed sections se primo avvio — id unici per ristorante
+      let secs = rawSections || [];
+      if (secs.length === 0) {
+        secs = DEFAULT_SECTIONS.map(s => ({ ...s, id: `${restaurant.id}_${s.id}` }));
+        await Promise.all(secs.map(s => saveToDB('sections', s)));
       }
+
+      setIngredients(ings);
+      setPreparations(preps);
+      setDishes(dishs);
+      setFixedCosts(fixed);
+      setEstimatedRevenue(parseFloat(savedRevenue) || 0);
+      setSections(secs);
+    } catch (err) {
+      console.error('[App] Errore caricamento dati:', err);
     }
-    loadAll();
   }, [restaurant]);
+
+  useEffect(() => { reloadData(); }, [reloadData]);
 
   // ── Totale costi fissi mensili (dalla lista fixed_costs)
   const totalFixed = useMemo(() =>
@@ -193,6 +201,7 @@ export default function App() {
     recentlyUpdatedDishes,
     onDishUpdated: handleDishUpdated,
     restaurant,
+    chatMessages, setChatMessages,
     currentPage,
     onNavigate: setCurrentPage,
     onOpenSettings: () => setShowSettings(true),
@@ -287,6 +296,9 @@ export default function App() {
         <SettingsModal
           onClose={() => setShowSettings(false)}
           restaurant={restaurant}
+          onRestaurantUpdated={setRestaurant}
+          reloadData={reloadData}
+          showToast={showToast}
           userEmail={session?.user?.email || ''}
           dishesCount={(dishes || []).length}
           ingredientsCount={(ingredients || []).length}
@@ -298,8 +310,26 @@ export default function App() {
         <ImportScanner
           kind={scannerKind}
           onClose={() => setScannerKind(null)}
-          onImported={() => window.location.reload()}
+          onImported={(count) => {
+            // Fix 2A: niente reload di pagina. Ricarico i dati e resto nella
+            // sezione corrente, con conferma non bloccante.
+            reloadData();
+            const n = Number(count) || 0;
+            showToast(`${n} element${n === 1 ? 'o' : 'i'} import${n === 1 ? 'ato' : 'ati'}`);
+          }}
         />
+      )}
+
+      {/* TOAST — conferma non bloccante in basso */}
+      {toast && (
+        <div style={{
+          position: 'fixed', left: '50%', bottom: 24, transform: 'translateX(-50%)',
+          zIndex: 2000, background: 'var(--text-primary)', color: 'var(--bg-primary)',
+          padding: '12px 20px', borderRadius: 10, fontSize: 14, fontWeight: 600,
+          boxShadow: '0 4px 16px rgba(0,0,0,0.25)', maxWidth: '90vw',
+        }}>
+          ✅ {toast}
+        </div>
       )}
     </div>
   );

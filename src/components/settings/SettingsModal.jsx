@@ -31,6 +31,7 @@ function Row({ label, children }) {
 // ══════════════════════════════════════════════════════
 export function SettingsModal({
   onClose, restaurant, userEmail = '',
+  onRestaurantUpdated, reloadData, showToast,
   dishesCount = 0, ingredientsCount = 0, fixedCount = 0, totalFixed = 0,
   isDark: isDarkProp, toggleTheme: toggleThemeProp,
 }) {
@@ -56,13 +57,18 @@ export function SettingsModal({
 
   const fmtEuro = n => '€ ' + (parseFloat(n) || 0).toLocaleString('it-IT', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
+  // Fix 2A: aggiornano lo stato in-place (no window.location.reload → nessun
+  // ritorno alla schermata di benvenuto/login).
   async function handleSaveName() {
     const name = nameInput.trim();
     if (!name || !restaurant?.id) { setEditName(false); return; }
     setSavingName(true);
     try {
       await supabase.from('restaurants').update({ name }).eq('id', restaurant.id);
-      window.location.reload();
+      onRestaurantUpdated?.({ ...restaurant, name });
+      setEditName(false);
+      setSavingName(false);
+      showToast?.('Nome del locale aggiornato');
     } catch {
       setSavingName(false);
       setEditName(false);
@@ -83,7 +89,9 @@ export function SettingsModal({
       const { data: pub } = supabase.storage.from('restaurant-logos').getPublicUrl(path);
       const url = `${pub.publicUrl}?t=${Date.now()}`; // cache-busting
       await supabase.from('restaurants').update({ logo_url: url }).eq('id', restaurant.id);
-      window.location.reload();
+      onRestaurantUpdated?.({ ...restaurant, logo_url: url });
+      setLogoBusy(false);
+      showToast?.('Logo aggiornato');
     } catch {
       setLogoBusy(false);
     }
@@ -93,7 +101,10 @@ export function SettingsModal({
     setSeedingDemo(true);
     const { seedDemoSupabase } = await import('../../lib/dataService');
     await seedDemoSupabase();
-    window.location.reload();
+    await reloadData?.();
+    setSeedingDemo(false);
+    onClose?.();
+    showToast?.('Dati demo caricati');
   }
 
   const handleLogout = async () => {

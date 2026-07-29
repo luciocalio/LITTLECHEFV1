@@ -15,6 +15,36 @@ const QUICK_REPLIES = [
   { label: '📊 Controlla margini',            prompt: 'Analizza i margini dei miei prodotti'         },
 ];
 
+// ── Markdown leggero per i messaggi del Sous Chef (fix 2D) ──────────────
+// Gestisce **grassetto**, elenchi "- ", intestazioni #, divisori --- e a capo.
+// Costruisce nodi React (niente dangerouslySetInnerHTML → nessun rischio XSS).
+function renderInline(text, kp) {
+  return String(text).split(/(\*\*[^*]+\*\*)/g).map((p, i) => {
+    const m = p.match(/^\*\*([^*]+)\*\*$/);
+    return m ? <strong key={`${kp}-${i}`}>{m[1]}</strong> : <span key={`${kp}-${i}`}>{p}</span>;
+  });
+}
+function renderMarkdown(text) {
+  if (!text) return null;
+  const lines = String(text).split('\n');
+  const blocks = [];
+  let list = null;
+  const flushList = key => { if (list) { blocks.push(<ul key={`ul-${key}`} style={{ margin: '4px 0', paddingLeft: 18 }}>{list}</ul>); list = null; } };
+  lines.forEach((line, idx) => {
+    const bullet = line.match(/^\s*[-*]\s+(.*)$/);
+    const heading = line.match(/^\s*#{1,6}\s+(.*)$/);
+    const rule = /^\s*-{3,}\s*$/.test(line);
+    if (bullet) { (list ||= []).push(<li key={`li-${idx}`} style={{ marginBottom: 2 }}>{renderInline(bullet[1], `li${idx}`)}</li>); return; }
+    flushList(idx);
+    if (rule) { blocks.push(<div key={`hr-${idx}`} style={{ borderTop: '1px solid var(--border-color)', margin: '8px 0' }} />); return; }
+    if (heading) { blocks.push(<div key={`h-${idx}`} style={{ fontWeight: 700, margin: '4px 0 2px' }}>{renderInline(heading[1], `h${idx}`)}</div>); return; }
+    if (line.trim() === '') { blocks.push(<div key={`sp-${idx}`} style={{ height: 6 }} />); return; }
+    blocks.push(<div key={`p-${idx}`}>{renderInline(line, `p${idx}`)}</div>);
+  });
+  flushList('end');
+  return <>{blocks}</>;
+}
+
 // Etichette in italiano mostrate nell'indicatore dedicato mentre il Sous Chef
 // sta effettivamente chiamando un tool (distinto dal generico "sta scrivendo").
 const TOOL_LABELS = {
@@ -43,12 +73,24 @@ export function ChatPage({
   fixedCostRatio = 0,
   restaurant,
   onDishUpdated,
+  chatMessages, setChatMessages, // 2C: cronologia tenuta in App → sopravvive al cambio sezione
 }) {
   const restaurantName = restaurant?.name ||
     localStorage.getItem('lc-restaurant-name') ||
     (() => { try { return JSON.parse(localStorage.getItem('lc-settings') || '{}').restaurantName || 'Chef'; } catch { return 'Chef'; } })();
 
-  const [messages, setMessages] = useState([welcomeMessage(restaurantName)]);
+  // La cronologia vive in App (stato sollevato). Qui usiamo quello stato;
+  // fallback locale solo se, per qualche motivo, i prop non fossero passati.
+  const [localMessages, setLocalMessages] = useState([]);
+  const messages    = chatMessages    ?? localMessages;
+  const setMessages = setChatMessages ?? setLocalMessages;
+
+  // Seed del messaggio di benvenuto una sola volta (se la cronologia è vuota)
+  useEffect(() => {
+    if (messages.length === 0) setMessages([welcomeMessage(restaurantName)]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const [input,      setInput]      = useState('');
   const [loading,    setLoading]    = useState(false);
   const [toolStatus, setToolStatus] = useState(null); // testo dedicato durante le chiamate tool
@@ -581,7 +623,7 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
                   ? 'none'
                   : '1px solid var(--border-color)',
               }}>
-                {msg.text}
+                {msg.role === 'assistant' ? renderMarkdown(msg.text) : msg.text}
                 <div style={{ fontSize: '10px', marginTop: '4px', textAlign: 'right', opacity: 0.6 }}>
                   {msg.time}
                 </div>

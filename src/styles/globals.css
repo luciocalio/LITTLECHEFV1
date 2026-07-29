@@ -229,13 +229,16 @@ body {
 .modal-box {
   background: var(--bg-modal); border-radius: var(--radius-lg);
   width: 100%; max-width: 520px; max-height: 90dvh;
-  overflow-y: auto; box-shadow: var(--shadow-lg);
-  transition: background 0.25s;
+  /* 2B: colonna flex con solo il body scrollabile → header e footer (con il
+     bottone Salva) restano sempre visibili anche se il contenuto cresce
+     (es. banner allergeni). */
+  display: flex; flex-direction: column; overflow: hidden;
+  box-shadow: var(--shadow-lg); transition: background 0.25s;
 }
-.modal-header { padding: 20px 24px 16px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+.modal-header { flex-shrink: 0; padding: 20px 24px 16px; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
 .modal-title  { font-family: var(--font-serif); font-size: 18px; font-weight: 700; color: var(--text-primary); }
-.modal-body   { padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
-.modal-footer { padding: 16px 24px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px; }
+.modal-body   { flex: 1 1 auto; overflow-y: auto; padding: 20px 24px; display: flex; flex-direction: column; gap: 14px; }
+.modal-footer { flex-shrink: 0; padding: 16px 24px; border-top: 1px solid var(--border-color); display: flex; justify-content: flex-end; gap: 10px; }
 
 /* ─── FORM ─── */
 .form-group { display: flex; flex-direction: column; gap: 6px; }
