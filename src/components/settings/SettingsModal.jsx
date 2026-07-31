@@ -32,6 +32,7 @@ function Row({ label, children }) {
 export function SettingsModal({
   onClose, restaurant, userEmail = '',
   onRestaurantUpdated, reloadData, showToast,
+  targetMargin = 60, onTargetMarginChange,
   dishesCount = 0, ingredientsCount = 0, fixedCount = 0, totalFixed = 0,
   isDark: isDarkProp, toggleTheme: toggleThemeProp,
 }) {
@@ -189,6 +190,24 @@ export function SettingsModal({
             <Row label="Ingredienti in dispensa"><strong style={{ fontFamily: 'var(--font-mono)' }}>{ingredientsCount}</strong></Row>
             <Row label="Voci di costo fisso"><strong style={{ fontFamily: 'var(--font-mono)' }}>{fixedCount}</strong></Row>
             <Row label="Totale costi fissi / mese"><strong style={{ fontFamily: 'var(--font-mono)', color: 'var(--gold)' }}>{fmtEuro(totalFixed)}</strong></Row>
+          </Section>
+
+          {/* MARGINE TARGET (3B) */}
+          <Section title="🎯 Margine target">
+            <Row label="Un piatto è “Ottimo” (verde) da">
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="number" min="0" max="100" step="1"
+                  value={targetMargin}
+                  onChange={e => onTargetMarginChange?.(e.target.value)}
+                  style={{ width: 70, fontFamily: 'var(--font-mono)', textAlign: 'right', padding: '8px 10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)', color: 'var(--text-primary)', fontSize: 16, fontWeight: 700, outline: 'none' }}
+                />
+                <strong>%</strong>
+              </span>
+            </Row>
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+              Sotto questa soglia i piatti non vengono più mostrati come “Ottimo”. Le altre soglie (Buono, Attenzione, Critico) restano invariate.
+            </p>
           </Section>
 
           {/* APP */}

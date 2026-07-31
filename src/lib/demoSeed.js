@@ -5,15 +5,12 @@
 
 import { dbSetAll, dbSetSetting } from './db';
 import { calcDishWithFixedCosts, calcFixedCostRatio } from './calcEngine';
+import { DEFAULT_SECTIONS } from './config';
 
 // ── SEZIONI ──────────────────────────────────────────────────────────────────
-const DEMO_SECTIONS = [
-  { id: 'demo_sec_antipasto', name: 'ANTIPASTO', order: 0 },
-  { id: 'demo_sec_primo',     name: 'PRIMO',     order: 1 },
-  { id: 'demo_sec_secondo',   name: 'SECONDO',   order: 2 },
-  { id: 'demo_sec_dolce',     name: 'DOLCE',     order: 3 },
-  { id: 'demo_sec_bevande',   name: 'BEVANDE',   order: 4 },
-];
+// Categorie centralizzate (con CONTORNO). La demo non ha piatti di contorno,
+// quindi quella sezione resta vuota ma disponibile.
+const DEMO_SECTIONS = DEFAULT_SECTIONS;
 
 // ── INGREDIENTI ──────────────────────────────────────────────────────────────
 const DEMO_INGREDIENTS_SPEC = [

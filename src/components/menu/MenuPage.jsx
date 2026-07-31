@@ -16,21 +16,15 @@ import { ProductCard }     from '../foodcost/ProductCard';
 import { SectionHeader }   from '../foodcost/SectionHeader';
 import { FilterBar, applyFiltersAndSort } from '../foodcost/FilterBar';
 import { PriceSuggestion } from '../foodcost/PriceSuggestion';
-import { MAX_DISH_PRICE } from '../../lib/config';
+import { MAX_DISH_PRICE, DEFAULT_SECTIONS } from '../../lib/config';
 import { toNum } from '../../lib/num';
 
 const uid  = () => Math.random().toString(36).slice(2, 10);
 const euro = n => '€' + (parseFloat(n) || 0).toFixed(2);
 const fmt1 = n => (parseFloat(n) || 0).toFixed(1);
 
-const FALLBACK_SECTIONS = [
-  { id: 'Antipasto',   name: 'ANTIPASTO',   order: 0 },
-  { id: 'Primo',       name: 'PRIMO',       order: 1 },
-  { id: 'Secondo',     name: 'SECONDO',     order: 2 },
-  { id: 'Dolce',       name: 'DOLCE',       order: 3 },
-  { id: 'Bevande/Bar', name: 'BEVANDE/BAR', order: 4 },
-  { id: 'Altro',       name: 'ALTRO',       order: 5 },
-];
+// Fallback di visualizzazione = categorie di default centralizzate (con CONTORNO)
+const FALLBACK_SECTIONS = DEFAULT_SECTIONS;
 
 // ──────────────────────────────────────────
 // MODALE DI CONFERMA GENERICA
@@ -429,6 +423,7 @@ export function MenuPage({
   recentlyUpdatedDishes,
   restaurant,
   onOpenScanner,
+  targetMargin = 60,
 }) {
   const [showAddModal,       setShowAddModal]       = useState(false);
   const [editingDish,        setEditingDish]        = useState(null);
@@ -721,6 +716,7 @@ export function MenuPage({
                     onToggleVisible={() => handleToggleVisible(dish)}
                     onDelete={() => requestDeleteDish(dish.id, dish.name)}
                     flashKey={(recentlyUpdatedDishes || []).find(e => e.id === dish.id)?.ts || null}
+                    targetMargin={targetMargin}
                   />
                 ))
               )}

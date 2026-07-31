@@ -2,28 +2,31 @@
 // Card prodotto con semaforo, costi breakdown e azioni
 import { useEffect, useState } from 'react';
 
-function marginColor(pct) {
-  if (pct >= 60) return '#16a34a';   // verde
-  if (pct >= 40) return 'var(--gold)';  // oro
-  if (pct >= 20) return '#f59e0b';   // arancio
-  return '#dc2626';                  // rosso
+// 3B: la soglia "Verde/Ottimo" è legata al margine target del ristorante
+// (green = pct >= target). Default target 60 → comportamento identico a prima.
+// Le soglie inferiori (Buono 40, Attenzione 20, Critico <20) restano fisse.
+function marginColor(pct, green) {
+  if (pct >= green) return '#16a34a';   // verde
+  if (pct >= 40)    return 'var(--gold)';  // oro
+  if (pct >= 20)    return '#f59e0b';   // arancio
+  return '#dc2626';                     // rosso
 }
 
-function marginLabel(pct) {
-  if (pct >= 60) return 'Ottimo';
-  if (pct >= 40) return 'Buono';
-  if (pct >= 20) return 'Attenzione';
+function marginLabel(pct, green) {
+  if (pct >= green) return 'Ottimo';
+  if (pct >= 40)    return 'Buono';
+  if (pct >= 20)    return 'Attenzione';
   return 'Critico';
 }
 
-function marginDot(pct) {
-  if (pct >= 60) return '🟢';
-  if (pct >= 40) return '🟡';
-  if (pct >= 20) return '🟠';
+function marginDot(pct, green) {
+  if (pct >= green) return '🟢';
+  if (pct >= 40)    return '🟡';
+  if (pct >= 20)    return '🟠';
   return '🔴';
 }
 
-export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDelete, isFirstRedDemo, flashKey }) {
+export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDelete, isFirstRedDemo, flashKey, targetMargin = 60 }) {
   // Flash visivo quando il piatto è stato appena aggiornato dal Sous Chef (chat).
   // Il timer riparte ogni volta che flashKey cambia (nuovo update), anche se
   // il componente non si è mai smontato.
@@ -42,9 +45,10 @@ export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDele
   const totalCost = hasFixed ? parseFloat(dish.totalCost || ingCost) : ingCost;
   const grossMrg  = sellPr - totalCost;
   const mPct      = sellPr > 0 ? ((grossMrg / sellPr) * 100) : 0;
-  const mColor    = marginColor(mPct);
-  const mLabel    = marginLabel(mPct);
-  const dot       = marginDot(mPct);
+  const green     = parseFloat(targetMargin) || 60;
+  const mColor    = marginColor(mPct, green);
+  const mLabel    = marginLabel(mPct, green);
+  const dot       = marginDot(mPct, green);
   const incomplete = ingCost === 0;
   const isHidden   = dish.isVisible === false;
 

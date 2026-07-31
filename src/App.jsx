@@ -17,14 +17,7 @@ import {
   getAllFromDB, dbSetSetting, saveToDB,
   seedDemoSupabase, clearRestaurantCache,
 } from './lib/dataService.js';
-
-const DEFAULT_SECTIONS = [
-  { id: 'sec_antipasto', name: 'ANTIPASTO',  order: 0 },
-  { id: 'sec_primo',     name: 'PRIMO',      order: 1 },
-  { id: 'sec_secondo',   name: 'SECONDO',    order: 2 },
-  { id: 'sec_dolce',     name: 'DOLCE',      order: 3 },
-  { id: 'sec_bevande',   name: 'BEVANDE',    order: 4 },
-];
+import { DEFAULT_SECTIONS } from './lib/config.js';
 
 export default function App() {
   // ── Autenticazione ────────────────────────────────────────────────────────
@@ -76,6 +69,7 @@ export default function App() {
   const [recentlyUpdatedDishes, setRecentlyUpdatedDishes] = useState([]); // [{id, ts}] — per flash visivo su Prodotti dopo update da chat
   const [toast,             setToast]              = useState(null); // conferma non bloccante (es. "5 elementi importati")
   const [chatMessages,      setChatMessages]        = useState([]);  // 2C: cronologia Sous Chef a livello app (sopravvive al cambio sezione)
+  const [targetMargin,      setTargetMargin]        = useState(60);  // 3B: margine target per la soglia colore "Verde/Ottimo"
 
   const showToast = useCallback(msg => {
     setToast(msg);
@@ -176,6 +170,19 @@ export default function App() {
     await dbSetSetting('estimatedMonthlyRevenue', val);
   }, []);
 
+  // ── 3B: margine target (preferenza di visualizzazione, per ristorante) ──
+  useEffect(() => {
+    if (!restaurant) return;
+    const saved = localStorage.getItem(`lc_target_margin_${restaurant.id}`);
+    setTargetMargin(saved != null ? (parseFloat(saved) || 60) : 60);
+  }, [restaurant]);
+
+  const handleTargetMarginChange = useCallback(value => {
+    const v = Math.max(0, Math.min(100, parseFloat(value) || 0));
+    setTargetMargin(v);
+    if (restaurant) localStorage.setItem(`lc_target_margin_${restaurant.id}`, String(v));
+  }, [restaurant]);
+
   // ── Flash visivo su Prodotti quando il Sous Chef aggiorna un piatto —
   // l'entry si auto-rimuove dopo 20s così tornare sulla pagina più tardi
   // non ri-innesca l'animazione.
@@ -202,6 +209,7 @@ export default function App() {
     onDishUpdated: handleDishUpdated,
     restaurant,
     chatMessages, setChatMessages,
+    targetMargin,
     currentPage,
     onNavigate: setCurrentPage,
     onOpenSettings: () => setShowSettings(true),
@@ -299,6 +307,8 @@ export default function App() {
           onRestaurantUpdated={setRestaurant}
           reloadData={reloadData}
           showToast={showToast}
+          targetMargin={targetMargin}
+          onTargetMarginChange={handleTargetMarginChange}
           userEmail={session?.user?.email || ''}
           dishesCount={(dishes || []).length}
           ingredientsCount={(ingredients || []).length}
