@@ -324,17 +324,11 @@ select {
   }
 }
 
-/* ── BOTTOM NAV FIX ── */
-@media (max-width: 768px) {
-  body {
-    padding-bottom: 80px; /* Space per MobileNav */
-  }
-
-  main,
-  [role="main"] {
-    padding-bottom: 16px;
-  }
-}
+/* ── BOTTOM NAV FIX ──
+   RIMOSSO: il vecchio `body { padding-bottom: 80px }` serviva a una bottom-nav
+   mobile non più esistente (la navigazione ora è in alto, TopBar). Quel padding
+   rendeva il body più alto del viewport nella pagina Chat (height:100dvh) e
+   permetteva di scrollare l'intera pagina oltre il campo di input. */
 
 /* ── NO HOVER ON MOBILE ── */
 @media (hover: none) {

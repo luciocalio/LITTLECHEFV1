@@ -557,6 +557,8 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
       display:       'flex',
       flexDirection: 'column',
       height:        '100dvh',
+      maxHeight:     '100dvh',
+      overflow:      'hidden',   // la pagina non scorre: solo l'area messaggi
       background:    'var(--bg-primary)',
     }}>
       {/* TOP BAR */}
@@ -593,12 +595,15 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
 
       {/* AREA MESSAGGI */}
       <div style={{
-        flex:          1,
-        overflowY:     'auto',
-        padding:       '16px',
-        display:       'flex',
-        flexDirection: 'column',
-        gap:           '10px',
+        flex:            1,
+        minHeight:       0,          // consente all'area di rimpicciolirsi e attivare l'overflow in flex-column
+        overflowY:       'auto',
+        overscrollBehavior: 'contain', // lo scroll dei messaggi non "trascina" la pagina
+        WebkitOverflowScrolling: 'touch',
+        padding:         '16px',
+        display:         'flex',
+        flexDirection:   'column',
+        gap:             '10px',
       }}>
         {messages.map(msg => (
           <div key={msg.id}>
