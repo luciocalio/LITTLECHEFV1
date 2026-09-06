@@ -82,6 +82,7 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
   const [internalNotes, setInternalNotes] = useState(dish?.internalNotes || '');
   const [isVisible,     setIsVisible]     = useState(dish?.isVisible !== false);
   const [error,         setError]         = useState(null);
+  const [isSaving,      setIsSaving]      = useState(false);
 
   const sectionNames = (sections && sections.length > 0)
     ? [...sections].sort((a, b) => (a.order ?? 0) - (b.order ?? 0)).map(s => s.name)
@@ -163,6 +164,14 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
   const removeComp = i => setComponents(prev => prev.filter((_, idx) => idx !== i));
 
   const handleSave = async () => {
+    // Guard anti-doppio-submit: un doppio click/tap rapido (tipico su mobile,
+    // specie mentre saveToDB() è ancora in volo) chiamerebbe questa funzione
+    // due volte; per un piatto NUOVO ogni chiamata genera un id diverso
+    // (`dish_${uid()}`), quindi produrrebbe due righe duplicate su Supabase
+    // invece di aggiornare la stessa. Stessa classe di bug già risolta per
+    // gli ingredienti in ricetta (guard anti-duplicato in addComp).
+    if (isSaving) return;
+
     if (!name.trim())  { setError('Il nome è obbligatorio.'); return; }
     if (priceNum <= 0) { setError('Il prezzo di vendita deve essere > 0.'); return; }
     if (priceNum > MAX_DISH_PRICE) { setError(`Prezzo troppo alto: massimo ${MAX_DISH_PRICE} € per piatto.`); return; }
@@ -199,9 +208,16 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
       updated_at: new Date().toISOString(),
     };
 
-    await saveToDB('dishes', dishData);
-    onSave(dishData);
-    onClose();
+    setIsSaving(true);
+    try {
+      await saveToDB('dishes', dishData);
+      onSave(dishData);
+      onClose();
+    } catch (err) {
+      setError(err.message || 'Salvataggio non riuscito. Riprova.');
+    } finally {
+      setIsSaving(false);
+    }
   };
 
   return (
@@ -245,9 +261,6 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
             </div>
           </div>
 
-          {/* SUGGERIMENTO PREZZO */}
-          {foodCost > 0 && <PriceSuggestion totalCost={foodCost} />}
-
           {/* RICERCA COMPONENTI */}
           <div>
             <div className="form-label" style={{ marginBottom: 8 }}>Ingredienti e Preparazioni</div>
@@ -268,6 +281,7 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
                   {allOptions.slice(0, 8).map(opt => (
                     <button
                       key={opt.id}
+                      onMouseDown={e => { e.preventDefault(); addComp(opt); }}
                       onClick={() => addComp(opt)}
                       style={{
                         width: '100%', textAlign: 'left', padding: '10px 14px',
@@ -323,6 +337,12 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
               );
             })}
           </div>
+
+          {/* SUGGERIMENTO PREZZO — sotto la lista ingredienti, mai sopra la
+              barra di ricerca: se stesse sopra, comparire/scomparire mentre
+              si aggiungono ingredienti sposterebbe la barra e il suo dropdown
+              proprio durante il flusso di selezione, causando click "a vuoto" (fix 4) */}
+          {foodCost > 0 && <PriceSuggestion totalCost={foodCost} />}
 
           {/* FOOD COST MANUALE */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
@@ -403,8 +423,8 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
         </div>
         <div className="modal-footer">
           <button className="btn-secondary" onClick={onClose}>Annulla</button>
-          <button className="btn-primary" onClick={handleSave}>
-            {dish ? 'Salva Modifiche' : 'Salva Prodotto'}
+          <button className="btn-primary" onClick={handleSave} disabled={isSaving}>
+            {isSaving ? 'Salvataggio...' : (dish ? 'Salva Modifiche' : 'Salva Prodotto')}
           </button>
         </div>
       </div>

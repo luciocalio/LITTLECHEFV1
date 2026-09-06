@@ -4,7 +4,8 @@ import { TopBar }   from '../layout/TopBar';
 import { saveToDB, getAllFromDB } from '../../lib/dataService';
 import { supabase } from '../../lib/supabase';
 import { DAILY_MESSAGE_LIMIT } from '../../lib/config';
-import { calcDishFoodCost, calcMargin, calcDishWithFixedCosts } from '../../lib/calcEngine';
+import { calcDishFoodCost, calcMargin, calcDishWithFixedCosts, getUnitCategory } from '../../lib/calcEngine';
+import { toNum } from '../../lib/num';
 
 // La chiave Anthropic vive lato server (funzione /api/chat), mai nel bundle.
 
@@ -52,6 +53,7 @@ const TOOL_LABELS = {
   get_dish_details:         '📋 Recupero i dettagli del piatto...',
   update_dish_price:        '💾 Aggiorno il prezzo e ricalcolo i margini...',
   get_most_profitable_dish: '🏆 Cerco il piatto più redditizio...',
+  update_dish_ingredients:  '🧂 Modifico la ricetta e ricalcolo il food cost...',
 };
 
 function welcomeMessage(name) {
@@ -297,15 +299,22 @@ Hai accesso a questi TOOL per leggere e modificare i dati in tempo reale:
 - get_dish_details: Info complete di un piatto
 - update_dish_price: Cambia prezzo di vendita
 - get_most_profitable_dish: Piatto più redditizio
+- update_dish_ingredients: Aggiunge, rimuove o sostituisce un ingrediente/preparazione nella ricetta di un piatto (azioni "add" / "remove" / "replace")
 
 QUANDO L'UTENTE CHIEDE:
 1. "Quali piatti sono critici?" o "Margini bassi?" → usa get_critical_dishes
 2. "Dettagli di [piatto]?" → usa get_dish_details
 3. "Aumenta prezzo di [piatto]?" → usa update_dish_price
 4. "Quale piatto è più redditizio?" → usa get_most_profitable_dish e riporta ESPLICITAMENTE ENTRAMBE le metriche: il piatto con margine PERCENTUALE più alto E il piatto con GUADAGNO ASSOLUTO in € per porzione più alto. Se sono piatti diversi, chiariscilo (un margine % alto può valere pochi centesimi se il piatto costa poco).
-5. SEMPRE rispondi in italiano con spiegazione, mai solo numeri
+5. "Sostituisci [ingrediente A] con [ingrediente B] in [piatto]", "Aggiungi [ingrediente] a [piatto]", "Togli [ingrediente] da [piatto]" → usa update_dish_ingredients con action="replace"/"add"/"remove". Dopo la chiamata, conferma ESPLICITAMENTE cosa hai cambiato e il nuovo food cost/margine, leggendo SOLO i valori restituiti dal tool.
+6. SEMPRE rispondi in italiano con spiegazione, mai solo numeri
 
-REGOLA SUI NUMERI (fondamentale): quando citi un numero (margine, prezzo, food cost, guadagno) usa SEMPRE il valore restituito dall'ultimo tool o dai DATI ATTUALI qui sopra, MAI un valore che avevi menzionato prima nella conversazione. Se in questo turno hai appena modificato un prezzo con update_dish_price, usa i nuovi valori restituiti dal tool, non quelli vecchi.
+REGOLA SU update_dish_ingredients — QUANTITÀ (fondamentale, non derogabile):
+- action="add": la quantità è OBBLIGATORIA. Se l'utente non l'ha specificata, NON chiamare il tool con un valore inventato: chiedi prima la quantità in chat e aspetta la risposta.
+- action="replace": se l'utente non specifica la quantità del nuovo ingrediente, chiama comunque il tool SENZA il campo quantity — il tool manterrà automaticamente la stessa quantità dell'ingrediente sostituito (mai un valore a caso) e te lo confermerà nel risultato (quantityInherited: true). Riporta questo dato nella risposta all'utente.
+- Se il tool restituisce needsQuantity oppure error, NON riprovare inventando un numero: rispondi in chat chiedendo l'informazione mancante.
+
+REGOLA SUI NUMERI (fondamentale): quando citi un numero (margine, prezzo, food cost, guadagno) usa SEMPRE il valore restituito dall'ultimo tool o dai DATI ATTUALI qui sopra, MAI un valore che avevi menzionato prima nella conversazione. Se in questo turno hai appena modificato un prezzo o una ricetta con update_dish_price/update_dish_ingredients, usa i nuovi valori restituiti dal tool, non quelli vecchi.
 
 FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiave e elenchi puntati con "- ". Niente tabelle o intestazioni #.`;
 
@@ -340,6 +349,30 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
           name: 'get_most_profitable_dish',
           description: 'Restituisce DUE piatti: quello con margine percentuale più alto e quello con guadagno assoluto (€/porzione) più alto. Usalo per rispondere "qual è il piatto più redditizio" mostrando entrambe le metriche.',
           input_schema: { type: 'object', properties: {}, required: [] },
+        },
+        {
+          name: 'update_dish_ingredients',
+          description: 'Aggiunge, rimuove o sostituisce un ingrediente/preparazione nella ricetta di un piatto. Ricalcola food cost e margini automaticamente dopo la modifica, leggendo i dati freschi da Supabase.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              dishName: { type: 'string', description: 'Nome del piatto da modificare' },
+              action: {
+                type: 'string',
+                enum: ['add', 'remove', 'replace'],
+                description: 'add = aggiungi un nuovo ingrediente; remove = togli un ingrediente esistente; replace = sostituisci un ingrediente con un altro',
+              },
+              ingredientName: { type: 'string', description: 'Nome ingrediente/preparazione — richiesto per action="add" e action="remove"' },
+              oldIngredientName: { type: 'string', description: 'Nome dell\'ingrediente da sostituire — richiesto per action="replace"' },
+              newIngredientName: { type: 'string', description: 'Nome del nuovo ingrediente che lo sostituisce — richiesto per action="replace"' },
+              quantity: {
+                type: 'number',
+                description: 'Quantità del nuovo ingrediente, nell\'unità indicata in "unit". Per action="add" è OBBLIGATORIA: se non la conosci, NON chiamare il tool, chiedila prima all\'utente. Per action="replace" è opzionale: se omessa il tool mantiene automaticamente la quantità dell\'ingrediente sostituito.',
+              },
+              unit: { type: 'string', description: 'Unità di misura (g, kg, ml, L, pz, porzione, fetta...). Opzionale: se omessa si usa l\'unità base dell\'ingrediente in Dispensa, o quella dell\'ingrediente sostituito se compatibile (per action="replace").' },
+            },
+            required: ['dishName', 'action'],
+          },
         },
       ];
 
@@ -441,6 +474,192 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
             newPrice: newPrice.toFixed(2),
             oldMarginPct: (oldMarginPct || 0).toFixed(1),
             newMarginPct: (updated.marginPct || 0).toFixed(1),
+          });
+        }
+        if (toolName === 'update_dish_ingredients') {
+          const action = toolInput.action;
+          if (!['add', 'remove', 'replace'].includes(action)) {
+            return JSON.stringify({ error: 'Azione non valida: usa "add", "remove" o "replace".' });
+          }
+
+          // (a) Lettura FRESCA di piatto e dispensa in questo preciso momento —
+          // mai da `dishes`/`ingredients`/`preparations` catturati all'inizio del turno.
+          const [freshDishesAll, freshIngredients, freshPreparations] = await Promise.all([
+            getAllFromDB('dishes'),
+            getAllFromDB('ingredients'),
+            getAllFromDB('preparations'),
+          ]);
+          const rawDish = freshDishesAll.find(d => d.name?.toLowerCase() === toolInput.dishName?.toLowerCase());
+          if (!rawDish) return JSON.stringify({ error: `Piatto "${toolInput.dishName}" non trovato` });
+
+          const pantryAll = [
+            ...freshIngredients.map(p => ({ ...p, _type: 'ingredient' })),
+            ...freshPreparations.map(p => ({ ...p, _type: 'preparation' })),
+          ];
+          const findPantryItem = name => {
+            const q = (name || '').toLowerCase().trim();
+            if (!q) return { item: null, ambiguous: false };
+            const exact = pantryAll.filter(p => p.name?.toLowerCase() === q);
+            if (exact.length === 1) return { item: exact[0], ambiguous: false };
+            if (exact.length > 1) return { item: null, ambiguous: true, matches: exact };
+            const partial = pantryAll.filter(p => p.name?.toLowerCase().includes(q));
+            if (partial.length === 1) return { item: partial[0], ambiguous: false };
+            if (partial.length > 1) return { item: null, ambiguous: true, matches: partial };
+            return { item: null, ambiguous: false };
+          };
+
+          const components = Array.isArray(rawDish.components) ? [...rawDish.components] : [];
+          const compPantry = c => pantryAll.find(p => p.id === (c.id_ref || c.id));
+          const oldEnriched = enrichDish(rawDish);
+
+          // Sceglie un'unità compatibile per CATEGORIA (peso/volume/pezzi) con
+          // l'ingrediente di destinazione. Se quella proposta (esplicita o
+          // ereditata) non è compatibile, ripiega sull'unità base dell'ingrediente
+          // in Dispensa — mai un'unità incompatibile che farebbe collassare
+          // silenziosamente il costo di quella riga a 0 (calcEngine.js).
+          const safeUnit = (candidateUnit, targetItem) => {
+            const targetCat = getUnitCategory(targetItem.unit);
+            const candCat   = getUnitCategory(candidateUnit);
+            return (candidateUnit && targetCat && candCat && targetCat === candCat) ? candidateUnit : targetItem.unit;
+          };
+
+          let newComponents = components;
+          let summary = {};
+          let expectedPresentId = null; // id_ref che DEVE comparire dopo la scrittura
+          let expectedAbsentId  = null; // id_ref che NON deve più comparire dopo la scrittura
+
+          if (action === 'remove') {
+            if (!toolInput.ingredientName) return JSON.stringify({ error: 'Specifica quale ingrediente rimuovere.' });
+            const idx = components.findIndex(c => compPantry(c)?.name?.toLowerCase() === toolInput.ingredientName.toLowerCase());
+            if (idx === -1) return JSON.stringify({ error: `"${toolInput.ingredientName}" non è nella ricetta di "${rawDish.name}".` });
+            const removed = compPantry(components[idx]);
+            expectedAbsentId = components[idx].id_ref || components[idx].id;
+            newComponents = components.filter((_, i) => i !== idx);
+            summary = { action: 'remove', ingredient: removed?.name || toolInput.ingredientName };
+          }
+
+          if (action === 'add') {
+            if (!toolInput.ingredientName) return JSON.stringify({ error: 'Specifica quale ingrediente aggiungere.' });
+            const { item, ambiguous, matches } = findPantryItem(toolInput.ingredientName);
+            if (ambiguous) return JSON.stringify({ error: `Più ingredienti corrispondono a "${toolInput.ingredientName}": ${matches.map(m => m.name).join(', ')}. Chiedi all'utente quale intende.` });
+            if (!item) return JSON.stringify({ error: `"${toolInput.ingredientName}" non è in Dispensa. Va aggiunto lì prima di poterlo usare in una ricetta.` });
+            if (components.some(c => (c.id_ref || c.id) === item.id)) {
+              return JSON.stringify({ error: `"${item.name}" è già nella ricetta di "${rawDish.name}".` });
+            }
+            const qty = toNum(toolInput.quantity);
+            if (!(qty > 0)) {
+              return JSON.stringify({
+                needsQuantity: true,
+                message: `Serve la quantità di "${item.name}" da aggiungere a "${rawDish.name}" (es. "50 g"). Chiedila all'utente, non inventarla.`,
+              });
+            }
+            const unit = safeUnit(toolInput.unit, item);
+            newComponents = [...components, {
+              id: crypto.randomUUID(), type: item._type, id_ref: item.id,
+              name: item.name, qty, quantity: qty, unit,
+            }];
+            expectedPresentId = item.id;
+            summary = { action: 'add', ingredient: item.name, quantity: qty, unit };
+          }
+
+          if (action === 'replace') {
+            if (!toolInput.oldIngredientName || !toolInput.newIngredientName) {
+              return JSON.stringify({ error: 'Specifica sia l\'ingrediente da sostituire sia quello nuovo.' });
+            }
+            const idx = components.findIndex(c => compPantry(c)?.name?.toLowerCase() === toolInput.oldIngredientName.toLowerCase());
+            if (idx === -1) return JSON.stringify({ error: `"${toolInput.oldIngredientName}" non è nella ricetta di "${rawDish.name}".` });
+            const oldComp = components[idx];
+            const oldItem = compPantry(oldComp);
+
+            const { item: newItem, ambiguous, matches } = findPantryItem(toolInput.newIngredientName);
+            if (ambiguous) return JSON.stringify({ error: `Più ingredienti corrispondono a "${toolInput.newIngredientName}": ${matches.map(m => m.name).join(', ')}. Chiedi all'utente quale intende.` });
+            if (!newItem) return JSON.stringify({ error: `"${toolInput.newIngredientName}" non è in Dispensa. Va aggiunto lì prima di poterlo usare in una ricetta.` });
+
+            // Quantità: se specificata la usiamo; altrimenti MANTENIAMO quella
+            // dell'ingrediente sostituito (comportamento scelto per il caso
+            // grana→pecorino) — mai un valore inventato.
+            let qty = toNum(toolInput.quantity);
+            let inheritedQty = false;
+            if (!(qty > 0)) {
+              qty = toNum(oldComp.qty ?? oldComp.quantity);
+              inheritedQty = true;
+            }
+            // Unità: quella esplicita se compatibile, altrimenti quella
+            // ereditata dal vecchio ingrediente se compatibile, altrimenti
+            // l'unità base del nuovo ingrediente (mai una incompatibile).
+            const oldUnit = oldComp.unit || oldItem?.unit;
+            const unit = toolInput.unit ? safeUnit(toolInput.unit, newItem) : safeUnit(oldUnit, newItem);
+
+            expectedAbsentId  = oldComp.id_ref || oldComp.id;
+            expectedPresentId = newItem.id;
+            newComponents = components.map((c, i) => i === idx ? {
+              id: crypto.randomUUID(), type: newItem._type, id_ref: newItem.id,
+              name: newItem.name, qty, quantity: qty, unit,
+            } : c);
+            summary = {
+              action: 'replace', oldIngredient: oldItem?.name || toolInput.oldIngredientName,
+              newIngredient: newItem.name, quantity: qty, unit, quantityInherited: inheritedQty,
+            };
+          }
+
+          // (b) Ricalcolo food cost/margini con lo stesso calcEngine, sui dati freschi
+          const cleanComps = newComponents.filter(c => c.id_ref && toNum(c.qty) > 0);
+          const calculatedFoodCost = calcDishFoodCost(
+            cleanComps.map(c => ({ type: c.type, id: c.id_ref, quantity: toNum(c.qty), unit: c.unit })),
+            freshIngredients, freshPreparations
+          );
+          const price = rawDish.selling_price || rawDish.price || 0;
+          const { marginEuro: me, marginPct: mp, status: st } = calcMargin(price, calculatedFoodCost);
+
+          const updatedDish = {
+            ...rawDish,
+            components: cleanComps,
+            food_cost: calculatedFoodCost,
+            margin_euro: me,
+            margin_pct: mp,
+            status: st,
+            ingredientUpdatedAt: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          };
+
+          // (c) Scrittura del SOLO piatto modificato. restaurant_id è impostato
+          // da saveToDB() in base al ristorante dell'utente loggato (getRestaurantId()):
+          // non può mai scrivere altrove, e le policy RLS lo impongono comunque
+          // anche in caso di bug lato client.
+          await saveToDB('dishes', updatedDish);
+
+          // (d) Rilettura da Supabase per confermare che la scrittura sia
+          // riuscita e che la ricetta contenga davvero la modifica attesa —
+          // solo ORA si può dichiarare successo.
+          const verifyDishes = await getAllFromDB('dishes');
+          const verifyFromDB = verifyDishes.find(d => d.id === updatedDish.id);
+          const verifyIdRefs = (verifyFromDB?.components || []).map(c => c.id_ref);
+          const presentOk = !expectedPresentId || verifyIdRefs.includes(expectedPresentId);
+          const absentOk  = !expectedAbsentId  || !verifyIdRefs.includes(expectedAbsentId);
+          const verifyOk = !!verifyFromDB && Array.isArray(verifyFromDB.components) &&
+            verifyFromDB.components.length === cleanComps.length &&
+            presentOk && absentOk &&
+            Math.abs((verifyFromDB.food_cost || 0) - calculatedFoodCost) < 0.0001;
+
+          if (!verifyOk) {
+            return JSON.stringify({ error: 'Errore: la scrittura della ricetta su Supabase non è riuscita o non corrisponde a quanto atteso.' });
+          }
+
+          setDishes(prev => prev.map(d => d.id === verifyFromDB.id ? verifyFromDB : d));
+          onDishUpdated?.(verifyFromDB.id);
+
+          // (e) Numeri riportati al Sous Chef: SEMPRE riletti dal DB dopo la
+          // scrittura verificata, mai stimati a mente.
+          const newEnriched = enrichDish(verifyFromDB);
+          return JSON.stringify({
+            success: true,
+            ...summary,
+            dishName: rawDish.name,
+            oldFoodCost: (oldEnriched.food_cost || 0).toFixed(2),
+            newFoodCost: (newEnriched.food_cost || 0).toFixed(2),
+            oldMarginPct: (oldEnriched.marginPct || 0).toFixed(1),
+            newMarginPct: (newEnriched.marginPct || 0).toFixed(1),
+            sellingPrice: (newEnriched.selling_price || newEnriched.price || 0).toFixed(2),
           });
         }
         if (toolName === 'get_most_profitable_dish') {
