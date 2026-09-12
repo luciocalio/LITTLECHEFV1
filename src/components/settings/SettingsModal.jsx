@@ -1,7 +1,9 @@
 import { useState, useRef } from 'react';
 import { useTheme } from '../../hooks/useTheme';
 import { supabase } from '../../lib/supabase';
-import { OWNER_EMAIL, DAILY_MESSAGE_LIMIT } from '../../lib/config';
+import { OWNER_EMAIL, DAILY_MESSAGE_LIMIT, DEFAULT_VAT_RATE } from '../../lib/config';
+
+const VAT_PRESETS = [4, 10, 22];
 
 // ── SECTION ──
 function Section({ title, children }) {
@@ -49,6 +51,11 @@ export function SettingsModal({
   const logoRef = useRef(null);
   const [logoBusy, setLogoBusy] = useState(false);
 
+  // ── IVA (Stage 10, Punto 1) ──────────────────────────────────────────────
+  const [vatInput, setVatInput] = useState(String(restaurant?.vat_rate ?? DEFAULT_VAT_RATE));
+  const [savingVat, setSavingVat] = useState(false);
+  const [vatError,  setVatError]  = useState(null);
+
   const [seedingDemo, setSeedingDemo] = useState(false);
 
   const [showDelete,  setShowDelete]  = useState(false);
@@ -73,6 +80,27 @@ export function SettingsModal({
     } catch {
       setSavingName(false);
       setEditName(false);
+    }
+  }
+
+  async function handleSaveVatRate(value) {
+    const rate = parseFloat(String(value).replace(',', '.'));
+    if (!restaurant?.id) return;
+    if (isNaN(rate) || rate < 0 || rate > 100) {
+      setVatError('Inserisci un\'aliquota tra 0 e 100.');
+      return;
+    }
+    setVatError(null);
+    setSavingVat(true);
+    try {
+      await supabase.from('restaurants').update({ vat_rate: rate }).eq('id', restaurant.id);
+      onRestaurantUpdated?.({ ...restaurant, vat_rate: rate });
+      setVatInput(String(rate));
+      showToast?.('Aliquota IVA aggiornata');
+    } catch (err) {
+      setVatError(err.message || 'Salvataggio non riuscito.');
+    } finally {
+      setSavingVat(false);
     }
   }
 
@@ -207,6 +235,45 @@ export function SettingsModal({
             </Row>
             <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
               Sotto questa soglia i piatti non vengono più mostrati come “Ottimo”. Le altre soglie (Buono, Attenzione, Critico) restano invariate.
+            </p>
+          </Section>
+
+          {/* ALIQUOTA IVA (Stage 10, Punto 1) */}
+          <Section title="🧾 Aliquota IVA">
+            <Row label="Aliquota applicata ai piatti">
+              <span style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <input
+                  type="number" min="0" max="100" step="0.1"
+                  value={vatInput}
+                  onChange={e => setVatInput(e.target.value)}
+                  onBlur={() => handleSaveVatRate(vatInput)}
+                  onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur(); }}
+                  disabled={savingVat}
+                  style={{ width: 70, fontFamily: 'var(--font-mono)', textAlign: 'right', padding: '8px 10px', border: '1px solid var(--border-color)', borderRadius: 'var(--radius-sm)', background: 'var(--bg-input)', color: 'var(--text-primary)', fontSize: 16, fontWeight: 700, outline: 'none' }}
+                />
+                <strong>%</strong>
+              </span>
+            </Row>
+            <div style={{ display: 'flex', gap: 6 }}>
+              {VAT_PRESETS.map(p => (
+                <button
+                  key={p}
+                  onClick={() => { setVatInput(String(p)); handleSaveVatRate(p); }}
+                  disabled={savingVat}
+                  style={{
+                    padding: '6px 12px', minHeight: 36, borderRadius: 20,
+                    background: parseFloat(vatInput) === p ? 'var(--gold)' : 'var(--bg-secondary)',
+                    border: `1px solid ${parseFloat(vatInput) === p ? 'var(--gold)' : 'var(--border-color)'}`,
+                    color: parseFloat(vatInput) === p ? '#fff' : 'var(--text-secondary)',
+                    fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                  }}>
+                  {p}%
+                </button>
+              ))}
+            </div>
+            {vatError && <p style={{ fontSize: 12, color: 'var(--status-risk)', margin: 0 }}>{vatError}</p>}
+            <p style={{ fontSize: 12, color: 'var(--text-muted)', margin: 0 }}>
+              Il prezzo dei piatti resta IVA inclusa (quello che vedi sul menu). Margine e food cost % si calcolano sul ricavo netto: prezzo ÷ (1 + aliquota/100).
             </p>
           </Section>
 

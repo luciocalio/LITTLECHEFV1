@@ -39,12 +39,18 @@ export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDele
   }, [flashKey]);
 
   const sellPr    = parseFloat(dish.selling_price || dish.price || 0);
+  // netRevenue: ricavo IVA esclusa (Stage 10, Punto 1) — margine e food
+  // cost % si calcolano SEMPRE su questo, mai sul prezzo di menu lordo.
+  // Fallback a sellPr solo per piatti non ancora passati dall'arricchimento
+  // App.jsx (non dovrebbe succedere in produzione, difesa in profondità).
+  const netRev    = dish.netRevenue != null ? parseFloat(dish.netRevenue) : sellPr;
   const ingCost   = parseFloat(dish.food_cost || 0);
   const hasFixed  = parseFloat(dish.fixedCostOnDish) > 0;
   const fixedCost = hasFixed ? parseFloat(dish.fixedCostOnDish || 0) : 0;
   const totalCost = hasFixed ? parseFloat(dish.totalCost || ingCost) : ingCost;
-  const grossMrg  = sellPr - totalCost;
-  const mPct      = sellPr > 0 ? ((grossMrg / sellPr) * 100) : 0;
+  const grossMrg  = netRev - totalCost;
+  const mPct      = netRev > 0 ? ((grossMrg / netRev) * 100) : 0;
+  const showVat   = Math.abs(netRev - sellPr) > 0.001;
   const green     = parseFloat(targetMargin) || 60;
   const mColor    = marginColor(mPct, green);
   const mLabel    = marginLabel(mPct, green);
@@ -71,9 +77,16 @@ export function ProductCard({ dish, onEdit, onDuplicate, onToggleVisible, onDele
           color: 'var(--text-primary)', lineHeight: 1.3,
           whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis',
         }}>{dish.name}</p>
-        <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700, color: 'var(--text-primary)', flexShrink: 0 }}>
-          €{sellPr.toFixed(2)}
-        </span>
+        <div style={{ textAlign: 'right', flexShrink: 0 }}>
+          <span style={{ fontFamily: 'var(--font-mono)', fontSize: 16, fontWeight: 700, color: 'var(--text-primary)' }}>
+            €{sellPr.toFixed(2)}
+          </span>
+          {showVat && (
+            <div style={{ fontSize: 10, color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>
+              netto €{netRev.toFixed(2)}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* BADGES */}

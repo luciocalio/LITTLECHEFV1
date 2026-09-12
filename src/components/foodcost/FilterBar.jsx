@@ -79,7 +79,9 @@ export function applyFiltersAndSort(dishes, activeFilters, sortKey) {
       const pct = (() => {
         const pre = parseFloat(d.marginPct ?? d.margin_pct ?? 0);
         if (pre !== 0) return pre;
-        const sp = parseFloat(d.selling_price || d.price || 0);
+        // Fallback: ricavo netto (IVA esclusa) se disponibile, mai il prezzo
+        // di menu lordo (Stage 10, Punto 1).
+        const sp = parseFloat(d.netRevenue ?? d.selling_price ?? d.price ?? 0);
         const tc = parseFloat(d.totalCost || d.food_cost || 0);
         return sp > 0 ? ((sp - tc) / sp) * 100 : 0;
       })();
@@ -97,7 +99,7 @@ export function applyFiltersAndSort(dishes, activeFilters, sortKey) {
     const getMargPct = d => {
       const p = parseFloat(d.marginPct ?? d.margin_pct ?? 0);
       if (p !== 0) return p;
-      const sp = parseFloat(d.selling_price || d.price || 0);
+      const sp = parseFloat(d.netRevenue ?? d.selling_price ?? d.price ?? 0);
       const tc = parseFloat(d.totalCost || d.food_cost || 0);
       return sp > 0 ? ((sp - tc) / sp) * 100 : 0;
     };

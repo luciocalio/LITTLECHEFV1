@@ -454,7 +454,11 @@ export function PantryPage({
   const openEditPrep       = item => { setEditItem(item); setShowPrepModal(true); };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', background: 'var(--bg-primary)' }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      height: '100dvh', maxHeight: '100dvh', overflow: 'hidden', // pagina ferma: solo l'area lista scorre (Stage 10, Punto 3B)
+      background: 'var(--bg-primary)',
+    }}>
 
       {/* TOP BAR */}
       <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
@@ -482,8 +486,8 @@ export function PantryPage({
         />
       </div>
 
-      {/* CONTENUTO */}
-      <div style={{ flex: 1, padding: '12px 16px 32px', overflowY: 'auto' }}>
+      {/* CONTENUTO — unica area che scorre (minHeight:0 necessario in flex-column) */}
+      <div style={{ flex: 1, minHeight: 0, padding: '12px 16px 32px', overflowY: 'auto' }}>
         <div style={{ display: 'flex', gap: '10px', marginBottom: '16px', flexWrap: 'wrap' }}>
           <button
             onClick={() => { setEditItem(null); setShowIngModal(true); }}

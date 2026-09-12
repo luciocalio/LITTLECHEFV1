@@ -29,3 +29,8 @@ export const MAX_DISH_PRICE = 500;
 
 // Prezzo massimo plausibile per un ingrediente/preparazione (€/unità)
 export const MAX_INGREDIENT_PRICE = 1000;
+
+// Aliquota IVA di default per un nuovo ristorante (Stage 10, Punto 1) —
+// aliquota standard ristorazione in Italia. Modificabile per ristorante
+// in Settings, salvata su restaurants.vat_rate.
+export const DEFAULT_VAT_RATE = 10;

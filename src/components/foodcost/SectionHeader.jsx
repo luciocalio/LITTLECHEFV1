@@ -19,12 +19,14 @@ export function SectionHeader({ section, dishes, onRename, onDelete, onMoveUp, o
     setEditing(false);
   };
 
-  // Calcola margine medio della sezione
+  // Calcola margine medio della sezione — sul ricavo netto (IVA esclusa),
+  // mai sul prezzo di menu lordo (Stage 10, Punto 1). netRevenue è già
+  // calcolato da App.jsx; fallback al prezzo lordo solo per sicurezza.
   const avgMargin = (() => {
-    const valid = dishes.filter(d => parseFloat(d.selling_price || d.price) > 0);
+    const valid = dishes.filter(d => parseFloat(d.netRevenue ?? d.selling_price ?? d.price) > 0);
     if (valid.length === 0) return null;
     const sum = valid.reduce((acc, d) => {
-      const p = parseFloat(d.selling_price || d.price || 0);
+      const p = parseFloat(d.netRevenue ?? d.selling_price ?? d.price ?? 0);
       const c = parseFloat(d.totalCost || d.food_cost || 0);
       return acc + (p > 0 ? ((p - c) / p) * 100 : 0);
     }, 0);

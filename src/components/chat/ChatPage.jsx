@@ -3,8 +3,8 @@ import { useState, useEffect, useRef } from 'react';
 import { TopBar }   from '../layout/TopBar';
 import { saveToDB, getAllFromDB } from '../../lib/dataService';
 import { supabase } from '../../lib/supabase';
-import { DAILY_MESSAGE_LIMIT } from '../../lib/config';
-import { calcDishFoodCost, calcMargin, calcDishWithFixedCosts, getUnitCategory } from '../../lib/calcEngine';
+import { DAILY_MESSAGE_LIMIT, DEFAULT_VAT_RATE } from '../../lib/config';
+import { calcDishFoodCost, calcMargin, calcDishWithFixedCosts, calcNetRevenue, getUnitCategory } from '../../lib/calcEngine';
 import { toNum } from '../../lib/num';
 
 // La chiave Anthropic vive lato server (funzione /api/chat), mai nel bundle.
@@ -316,6 +316,8 @@ REGOLA SU update_dish_ingredients — QUANTITÀ (fondamentale, non derogabile):
 
 REGOLA SUI NUMERI (fondamentale): quando citi un numero (margine, prezzo, food cost, guadagno) usa SEMPRE il valore restituito dall'ultimo tool o dai DATI ATTUALI qui sopra, MAI un valore che avevi menzionato prima nella conversazione. Se in questo turno hai appena modificato un prezzo o una ricetta con update_dish_price/update_dish_ingredients, usa i nuovi valori restituiti dal tool, non quelli vecchi.
 
+REGOLA SULL'IVA (fondamentale): il prezzo di un piatto è IVA inclusa (quello che il cliente paga). Margine, food cost % e status (Ottimo/Buono/Attenzione/Critico) NON si calcolano su quel prezzo pieno, ma sul ricavo netto — la parte che resta davvero al ristorante dopo l'IVA. I tool ti restituiscono già margini e status calcolati sul ricavo netto: usali così come sono. Se l'utente chiede perché un margine sembra più basso di quanto si aspettasse, spiega che il calcolo tiene conto dell'IVA versata allo Stato, non è un errore.
+
 FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiave e elenchi puntati con "- ". Niente tabelle o intestazioni #.`;
 
       const tools = [
@@ -385,9 +387,14 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
       // campi DERIVATI e NON salvati nel DB: vanno ricalcolati sui dati freschi,
       // altrimenti risulterebbero sempre 0 e i numeri citati dal Sous Chef
       // sarebbero incoerenti (fix 1D). Stessa formula usata da update_dish_price.
+      // vatRate: aliquota del ristorante loggato (Stage 10, Punto 1). Il prezzo
+      // che l'utente vede/inserisce resta IVA inclusa — margine e food cost %
+      // si calcolano SEMPRE sul ricavo netto, mai sul prezzo pieno.
+      const vatRate = restaurant?.vat_rate ?? DEFAULT_VAT_RATE;
       const enrichDish = d => {
         const price = d.selling_price || d.price || 0;
-        return { ...d, ...calcDishWithFixedCosts(d.food_cost || 0, price, fixedCostRatio) };
+        const netRevenue = calcNetRevenue(price, vatRate);
+        return { ...d, ...calcDishWithFixedCosts(d.food_cost || 0, netRevenue, fixedCostRatio), netRevenue, vatRate };
       };
 
       const executeTool = async (toolName, toolInput) => {
@@ -411,6 +418,8 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
           return JSON.stringify({
             name: dish.name,
             price: dish.selling_price || dish.price,
+            vatRatePct: dish.vatRate,
+            netRevenue: (dish.netRevenue || 0).toFixed(2),
             foodCost: dish.food_cost,
             fixedCostOnDish: (dish.fixedCostOnDish || 0).toFixed(2),
             totalCost: (dish.totalCost || 0).toFixed(2),
@@ -434,12 +443,16 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
           const oldPrice = dish.selling_price || dish.price;
           const oldMarginPct = dish.marginPct;
 
-          // (b) Modifica applicata SOLO al piatto richiesto da questa chiamata
+          // (b) Modifica applicata SOLO al piatto richiesto da questa chiamata.
+          // newPrice è IVA inclusa (come da input utente/UI) — il margine si
+          // calcola sul ricavo netto (Stage 10, Punto 1).
+          const newNetRevenue = calcNetRevenue(newPrice, vatRate);
           const updated = {
             ...dish,
             selling_price: newPrice,
             price: newPrice,
-            ...calcDishWithFixedCosts(dish.food_cost || 0, newPrice, fixedCostRatio),
+            ...calcDishWithFixedCosts(dish.food_cost || 0, newNetRevenue, fixedCostRatio),
+            netRevenue: newNetRevenue,
             updated_at: new Date().toISOString(),
           };
 
@@ -472,6 +485,8 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
             success: true,
             oldPrice: oldPrice.toFixed(2),
             newPrice: newPrice.toFixed(2),
+            newNetRevenue: newNetRevenue.toFixed(2),
+            vatRatePct: vatRate,
             oldMarginPct: (oldMarginPct || 0).toFixed(1),
             newMarginPct: (updated.marginPct || 0).toFixed(1),
           });
@@ -609,7 +624,10 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
             freshIngredients, freshPreparations
           );
           const price = rawDish.selling_price || rawDish.price || 0;
-          const { marginEuro: me, marginPct: mp, status: st } = calcMargin(price, calculatedFoodCost);
+          // price è IVA inclusa — margine/status persistiti si calcolano sul
+          // ricavo netto (Stage 10, Punto 1), stessa regola di tutto il resto dell'app.
+          const netRevenueForSave = calcNetRevenue(price, vatRate);
+          const { marginEuro: me, marginPct: mp, status: st } = calcMargin(netRevenueForSave, calculatedFoodCost);
 
           const updatedDish = {
             ...rawDish,
@@ -660,6 +678,8 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
             oldMarginPct: (oldEnriched.marginPct || 0).toFixed(1),
             newMarginPct: (newEnriched.marginPct || 0).toFixed(1),
             sellingPrice: (newEnriched.selling_price || newEnriched.price || 0).toFixed(2),
+            netRevenue: (newEnriched.netRevenue || 0).toFixed(2),
+            vatRatePct: newEnriched.vatRate,
           });
         }
         if (toolName === 'get_most_profitable_dish') {

@@ -4,6 +4,18 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>LittleChef — The Undercover Partner</title>
+
+  <!-- PWA — Stage 10, Punto 2 -->
+  <link rel="manifest" href="/manifest.json" />
+  <meta name="theme-color" content="#E69D43" />
+  <link rel="icon" href="/icons/icon-192.png" type="image/png" />
+
+  <!-- iOS Safari non legge il manifest per icona/standalone: serve questi tag dedicati -->
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="LittleChef" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+
   <style>*{margin:0;padding:0;box-sizing:border-box}body{-webkit-font-smoothing:antialiased}</style>
 </head>
 <body>

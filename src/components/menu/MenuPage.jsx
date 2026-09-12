@@ -1,5 +1,5 @@
 // src/components/menu/MenuPage.jsx — V11
-import { useState, useMemo, useCallback, useRef } from 'react';
+import { useState, useMemo, useCallback, useRef, useEffect } from 'react';
 import { TopBar }         from '../layout/TopBar';
 import { UnitSelect }     from '../ui/UnitSelect';
 import { StatusBadge }    from '../ui/StatusBadge';
@@ -9,6 +9,7 @@ import {
   calcPreparationInDish,
   calcDishFoodCost,
   calcMargin,
+  calcNetRevenue,
 } from '../../lib/calcEngine';
 import { calcDishAllergens } from '../../lib/allergens';
 import { saveToDB, deleteFromDB } from '../../lib/dataService';
@@ -16,7 +17,7 @@ import { ProductCard }     from '../foodcost/ProductCard';
 import { SectionHeader }   from '../foodcost/SectionHeader';
 import { FilterBar, applyFiltersAndSort } from '../foodcost/FilterBar';
 import { PriceSuggestion } from '../foodcost/PriceSuggestion';
-import { MAX_DISH_PRICE, DEFAULT_SECTIONS } from '../../lib/config';
+import { MAX_DISH_PRICE, DEFAULT_SECTIONS, DEFAULT_VAT_RATE } from '../../lib/config';
 import { toNum } from '../../lib/num';
 
 const uid  = () => Math.random().toString(36).slice(2, 10);
@@ -72,7 +73,8 @@ function ConfirmModal({ title, message, subMessage, onConfirm, onClose }) {
 // ──────────────────────────────────────────
 // MODAL PIATTO
 // ──────────────────────────────────────────
-function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, sections, onSave, onClose }) {
+function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, sections, restaurant, onSave, onClose }) {
+  const vatRate = restaurant?.vat_rate ?? DEFAULT_VAT_RATE;
   const [name,          setName]          = useState(dish?.name || '');
   const [category,      setCategory]      = useState(dish?.category || defaultCategory || (sections?.[0]?.name || 'PRIMO'));
   const [price,         setPrice]         = useState(dish?.price ?? dish?.selling_price ?? '');
@@ -134,7 +136,10 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
 
   const foodCost = useManualCost ? (parseFloat(manualCost) || 0) : autoCost;
   const priceNum = parseFloat(price) || 0;
-  const { marginEuro, marginPct, status } = calcMargin(priceNum, foodCost);
+  // priceNum è il prezzo di menu IVA inclusa (quello che l'utente inserisce e
+  // vede) — margine e food cost % si calcolano sul ricavo netto (Stage 10, Punto 1).
+  const netRevenue = calcNetRevenue(priceNum, vatRate);
+  const { marginEuro, marginPct, status } = calcMargin(netRevenue, foodCost);
 
   const allergens = useMemo(() => {
     const comps = components.filter(c => c.id_ref).map(c => ({ type: c.type, id: c.id_ref }));
@@ -184,7 +189,10 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
           allIngredients || [], allPreparations || []
         );
 
-    const { marginEuro: me, marginPct: mp, status: st } = calcMargin(priceNum, calculatedFoodCost);
+    // Ricalcolato qui (non riusato lo stato `netRevenue` sopra) perché
+    // useManualCost può cambiare foodCost tra il preview e il salvataggio.
+    const netRevenueAtSave = calcNetRevenue(priceNum, vatRate);
+    const { marginEuro: me, marginPct: mp, status: st } = calcMargin(netRevenueAtSave, calculatedFoodCost);
 
     const dishData = {
       id:             dish?.id || `dish_${uid()}`,
@@ -375,7 +383,8 @@ function PiattoModal({ dish, allIngredients, allPreparations, defaultCategory, s
               border: '1px solid var(--border-color)',
             }}>
               {[
-                ['Prezzo',    euro(priceNum)],
+                ['Prezzo menu (IVA incl.)', euro(priceNum)],
+                [`Ricavo netto (IVA ${fmt1(vatRate)}%)`, euro(netRevenue)],
                 ['Food Cost', euro(foodCost)],
                 ['Guadagno',  `${euro(marginEuro)} (${fmt1(marginPct)}%)`],
               ].map(([l, v]) => (
@@ -456,11 +465,66 @@ export function MenuPage({
   const [deleteDishModal,    setDeleteDishModal]    = useState(null); // { id, name }
   const newSectionInputRef = useRef(null);
 
+  // ── Stage 10, Punto 3A: vista a categorie con drill-down ──────────
+  // null = vista categorie (card cliccabili); stringa = categoria aperta.
+  const [openCategory, setOpenCategory] = useState(null);
+  // "Vedi tutti i piatti": lista intera in un colpo solo, come prima di 3A.
+  const [showAllFlat,  setShowAllFlat]  = useState(false);
+  // Ricerca globale sul nome piatto — indipendente dalla categoria aperta.
+  const [searchQuery,  setSearchQuery]  = useState('');
+
   // ── Sections ordinati per display ────────────────────────────────
   const activeSections = useMemo(() => {
     const list = (sections && sections.length > 0) ? sections : FALLBACK_SECTIONS;
     return [...list].sort((a, b) => (a.order ?? 0) - (b.order ?? 0));
   }, [sections]);
+
+  // Se la categoria aperta viene rinominata/eliminata mentre è in vista
+  // drill-down, torna alla vista categorie invece di restare su un nome
+  // che non esiste più (mai un setState durante il render).
+  useEffect(() => {
+    if (openCategory && !activeSections.some(s => s.name === openCategory)) {
+      setOpenCategory(null);
+    }
+  }, [openCategory, activeSections]);
+
+  // I filtri semaforo e la ricerca sono SEMPRE globali (across-category):
+  // quando uno dei due è attivo si esce dalla vista a categorie/drill-down
+  // e si mostra il risultato su tutte le sezioni, indipendentemente da
+  // quale categoria fosse eventualmente aperta.
+  const isNarrowing = activeFilters.length > 0 || searchQuery.trim() !== '';
+  const isFlatView  = isNarrowing || showAllFlat;
+
+  const matchesSearch = useCallback(dish => {
+    const q = searchQuery.trim().toLowerCase();
+    return !q || (dish.name || '').toLowerCase().includes(q);
+  }, [searchQuery]);
+
+  const enrichForDisplay = useCallback(rawList => rawList.map(dish => {
+    const hasUpdatedIngredients = (dish.components || []).some(comp => {
+      const ing = (ingredients || []).find(i => i.id === (comp.id_ref || comp.id));
+      if (!ing?.updated_at || !dish.ingredientUpdatedAt) return false;
+      return new Date(ing.updated_at) > new Date(dish.ingredientUpdatedAt);
+    });
+    return hasUpdatedIngredients ? { ...dish, hasUpdatedIngredients: true } : dish;
+  }), [ingredients]);
+
+  const getSectionDishes = useCallback(section => {
+    const rawDishes = (dishes || []).filter(d =>
+      (d.category || '').toUpperCase() === section.name.toUpperCase() && matchesSearch(d)
+    );
+    const sortedDishes = applyFiltersAndSort(enrichForDisplay(rawDishes), activeFilters, sortKey);
+    return { rawDishes, sortedDishes };
+  }, [dishes, matchesSearch, enrichForDisplay, activeFilters, sortKey]);
+
+  // Sezioni con almeno un risultato, quando si sta effettivamente
+  // restringendo (ricerca/filtro) — evita una parete di sezioni vuote.
+  // Con "vedi tutti i piatti" invece si mostrano tutte, comprese le vuote,
+  // com'era il comportamento di sempre.
+  const sectionsToShow = useMemo(() => {
+    if (!isNarrowing) return activeSections;
+    return activeSections.filter(s => getSectionDishes(s).sortedDishes.length > 0);
+  }, [isNarrowing, activeSections, getSectionDishes]);
 
   // ── DISH HANDLERS ────────────────────────────────────────────────
   const handleSaveDish = useCallback(saved => {
@@ -570,6 +634,62 @@ export function MenuPage({
     setSections(withOrder);
   }, [activeSections, setSections]);
 
+  // Rendering di UNA sezione (header + piatti + bottone aggiungi) — condiviso
+  // tra vista piatta (tutte le sezioni) e vista drill-down (una sola).
+  const renderSection = (section, idx) => {
+    const { rawDishes, sortedDishes } = getSectionDishes(section);
+    return (
+      <div key={section.id} style={{ marginBottom: 24 }}>
+        <SectionHeader
+          section={section}
+          dishes={rawDishes}
+          onRename={handleRenameSection}
+          onDelete={requestDeleteSection}
+          onMoveUp={() => handleMoveSection(section.id, -1)}
+          onMoveDown={() => handleMoveSection(section.id, 1)}
+          isFirst={idx === 0}
+          isLast={idx === activeSections.length - 1}
+        />
+        {sortedDishes.length === 0 ? (
+          <div style={{
+            padding: '16px', background: 'var(--bg-card)',
+            borderRadius: '8px', border: '1px dashed var(--border-color)',
+            textAlign: 'center', marginBottom: 6,
+          }}>
+            <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
+              {isNarrowing
+                ? 'Nessun prodotto corrisponde alla ricerca/ai filtri.'
+                : 'Nessun prodotto in questa sezione.'}
+            </p>
+          </div>
+        ) : (
+          sortedDishes.map(dish => (
+            <ProductCard
+              key={dish.id}
+              dish={dish}
+              onEdit={() => openEdit(dish)}
+              onDuplicate={() => handleDuplicateDish(dish)}
+              onToggleVisible={() => handleToggleVisible(dish)}
+              onDelete={() => requestDeleteDish(dish.id, dish.name)}
+              flashKey={(recentlyUpdatedDishes || []).find(e => e.id === dish.id)?.ts || null}
+              targetMargin={targetMargin}
+            />
+          ))
+        )}
+        <button
+          onClick={() => openAdd(section.name)}
+          style={{
+            display: 'block', width: '100%', padding: '8px', minHeight: '36px',
+            background: 'none', border: '1px dashed var(--border-color)',
+            borderRadius: '8px', color: 'var(--text-muted)',
+            fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginTop: 4,
+          }}>
+          + Aggiungi prodotto in {section.name}
+        </button>
+      </div>
+    );
+  };
+
   const openAdd = sectionName => {
     setAddToCategory(sectionName || activeSections[0]?.name || '');
     setEditingDish(null);
@@ -582,7 +702,11 @@ export function MenuPage({
   };
 
   return (
-    <div style={{ display: 'flex', flexDirection: 'column', minHeight: '100dvh', background: 'var(--bg-primary)' }}>
+    <div style={{
+      display: 'flex', flexDirection: 'column',
+      height: '100dvh', maxHeight: '100dvh', overflow: 'hidden', // pagina ferma: solo l'area lista scorre (Stage 10, Punto 3B)
+      background: 'var(--bg-primary)',
+    }}>
 
       {/* TOP BAR */}
       <TopBar currentPage={currentPage} onNavigate={onNavigate} onOpenSettings={onOpenSettings} restaurant={restaurant} />
@@ -594,13 +718,43 @@ export function MenuPage({
         </h1>
       </div>
 
-      {/* FILTER BAR */}
+      {/* FILTER BAR — sempre globale: attivarla mostra i risultati across-category */}
       <FilterBar
         activeFilters={activeFilters}
         setActiveFilters={setActiveFilters}
         sortKey={sortKey}
         setSortKey={setSortKey}
       />
+
+      {/* RICERCA — sempre globale, indipendente dalla categoria aperta */}
+      <div style={{ padding: '10px 16px 0', background: 'var(--bg-primary)' }}>
+        <div style={{ position: 'relative' }}>
+          <input
+            type="search"
+            value={searchQuery}
+            onChange={e => setSearchQuery(e.target.value)}
+            placeholder="🔍  Cerca un piatto..."
+            style={{
+              width: '100%', padding: '10px 16px',
+              border: '1px solid var(--border-color)', borderRadius: '10px',
+              background: 'var(--bg-card)', color: 'var(--text-primary)',
+              fontSize: '16px', minHeight: '44px', outline: 'none', boxSizing: 'border-box',
+            }}
+          />
+          {searchQuery && (
+            <button
+              onClick={() => setSearchQuery('')}
+              title="Cancella ricerca"
+              style={{
+                position: 'absolute', right: 6, top: '50%', transform: 'translateY(-50%)',
+                width: 32, height: 32, background: 'none', border: 'none',
+                color: 'var(--text-muted)', fontSize: 16, cursor: 'pointer',
+              }}>
+              ✕
+            </button>
+          )}
+        </div>
+      </div>
 
       {/* BOTTONE + AGGIUNGI SEZIONE (in cima, sotto FilterBar) */}
       <div style={{ padding: '10px 16px', borderBottom: '1px solid var(--border-color)', background: 'var(--bg-primary)' }}>
@@ -687,72 +841,96 @@ export function MenuPage({
         </div>
       )}
 
-      {/* LISTA SEZIONI */}
-      <div id="product-list-demo" style={{ flex: 1, padding: '12px 16px 32px', overflowY: 'auto', display: (dishes || []).length === 0 ? 'none' : undefined }}>
-        {activeSections.map((section, idx) => {
-          const rawDishes = (dishes || []).filter(d =>
-            (d.category || '').toUpperCase() === section.name.toUpperCase()
-          );
-          const enrichedDishes = rawDishes.map(dish => {
-            const hasUpdatedIngredients = (dish.components || []).some(comp => {
-              const ing = (ingredients || []).find(i => i.id === (comp.id_ref || comp.id));
-              if (!ing?.updated_at || !dish.ingredientUpdatedAt) return false;
-              return new Date(ing.updated_at) > new Date(dish.ingredientUpdatedAt);
-            });
-            return hasUpdatedIngredients ? { ...dish, hasUpdatedIngredients: true } : dish;
-          });
-          const sortedDishes = applyFiltersAndSort(enrichedDishes, activeFilters, sortKey);
-          return (
-            <div key={section.id} style={{ marginBottom: 24 }}>
-              <SectionHeader
-                section={section}
-                dishes={rawDishes}
-                onRename={handleRenameSection}
-                onDelete={requestDeleteSection}
-                onMoveUp={() => handleMoveSection(section.id, -1)}
-                onMoveDown={() => handleMoveSection(section.id, 1)}
-                isFirst={idx === 0}
-                isLast={idx === activeSections.length - 1}
-              />
-              {sortedDishes.length === 0 ? (
-                <div style={{
-                  padding: '16px', background: 'var(--bg-card)',
-                  borderRadius: '8px', border: '1px dashed var(--border-color)',
-                  textAlign: 'center', marginBottom: 6,
-                }}>
-                  <p style={{ color: 'var(--text-muted)', fontSize: '13px', margin: 0 }}>
-                    {activeFilters.length > 0
-                      ? 'Nessun prodotto corrisponde ai filtri.'
-                      : 'Nessun prodotto in questa sezione.'}
-                  </p>
-                </div>
-              ) : (
-                sortedDishes.map(dish => (
-                  <ProductCard
-                    key={dish.id}
-                    dish={dish}
-                    onEdit={() => openEdit(dish)}
-                    onDuplicate={() => handleDuplicateDish(dish)}
-                    onToggleVisible={() => handleToggleVisible(dish)}
-                    onDelete={() => requestDeleteDish(dish.id, dish.name)}
-                    flashKey={(recentlyUpdatedDishes || []).find(e => e.id === dish.id)?.ts || null}
-                    targetMargin={targetMargin}
-                  />
-                ))
-              )}
+      {/* AREA PRINCIPALE — Stage 10, Punto 3A: tre viste possibili.
+          1) ricerca/filtro attivi, o "vedi tutti" → lista piatta across-category
+          2) categoria aperta (drill-down) → solo i piatti di quella categoria
+          3) default → griglia categorie con conteggio, cliccabili */}
+      <div id="product-list-demo" style={{ flex: 1, minHeight: 0, padding: '12px 16px 32px', overflowY: 'auto', display: (dishes || []).length === 0 ? 'none' : undefined }}>
+        {isFlatView ? (
+          <>
+            {/* "← Torna alle categorie" solo per "vedi tutti": ricerca/filtro si
+                azzerano dai loro stessi controlli, sempre visibili sopra. */}
+            {showAllFlat && !isNarrowing && (
               <button
-                onClick={() => openAdd(section.name)}
+                onClick={() => setShowAllFlat(false)}
                 style={{
-                  display: 'block', width: '100%', padding: '8px', minHeight: '36px',
-                  background: 'none', border: '1px dashed var(--border-color)',
-                  borderRadius: '8px', color: 'var(--text-muted)',
-                  fontSize: '12px', fontWeight: '600', cursor: 'pointer', marginTop: 4,
+                  display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, minHeight: 44,
+                  background: 'none', border: 'none', color: 'var(--gold)',
+                  fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0,
                 }}>
-                + Aggiungi prodotto in {section.name}
+                ← Torna alle categorie
               </button>
-            </div>
-          );
-        })}
+            )}
+            {sectionsToShow.length === 0 ? (
+              <div className="empty-state" style={{ lineHeight: 1.6 }}>
+                <div className="empty-state-icon">🔍</div>
+                Nessun piatto corrisponde alla ricerca/ai filtri.
+              </div>
+            ) : (
+              sectionsToShow.map((section, idx) => renderSection(section, idx))
+            )}
+          </>
+        ) : openCategory ? (
+          <>
+            <button
+              onClick={() => setOpenCategory(null)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6, marginBottom: 16, minHeight: 44,
+                background: 'none', border: 'none', color: 'var(--gold)',
+                fontSize: 13, fontWeight: 700, cursor: 'pointer', padding: 0,
+              }}>
+              ← Tutte le categorie
+            </button>
+            {(() => {
+              const idx = activeSections.findIndex(s => s.name === openCategory);
+              return idx >= 0 ? renderSection(activeSections[idx], idx) : null;
+            })()}
+          </>
+        ) : (
+          /* VISTA CATEGORIE — card cliccabili con conteggio piatti */
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(150px, 1fr))', gap: 12 }}>
+            {activeSections.map(section => {
+              const count = (dishes || []).filter(d =>
+                (d.category || '').toUpperCase() === section.name.toUpperCase()
+              ).length;
+              return (
+                <button
+                  key={section.id}
+                  onClick={() => setOpenCategory(section.name)}
+                  style={{
+                    display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 6,
+                    padding: '20px 12px', minHeight: 110,
+                    background: 'var(--bg-card)', border: '1px solid var(--border-color)',
+                    borderRadius: 12, cursor: 'pointer', textAlign: 'center',
+                  }}>
+                  <span style={{ fontSize: 26 }}>🍽️</span>
+                  <span style={{
+                    fontFamily: 'var(--font-serif)', fontWeight: 700, fontSize: 13,
+                    color: 'var(--text-primary)', textTransform: 'uppercase', letterSpacing: 0.5,
+                  }}>
+                    {section.name}
+                  </span>
+                  <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                    {count} piatt{count === 1 ? 'o' : 'i'}
+                  </span>
+                </button>
+              );
+            })}
+            {/* VEDI TUTTI — lista intera in un colpo solo, per chi la preferisce */}
+            <button
+              onClick={() => setShowAllFlat(true)}
+              style={{
+                display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', gap: 6,
+                padding: '20px 12px', minHeight: 110,
+                background: 'none', border: '2px dashed var(--border-color)',
+                borderRadius: 12, cursor: 'pointer', textAlign: 'center', color: 'var(--text-muted)',
+              }}>
+              <span style={{ fontSize: 26 }}>📋</span>
+              <span style={{ fontWeight: 700, fontSize: 13 }}>Vedi tutti i piatti</span>
+              <span style={{ fontSize: 12 }}>({(dishes || []).length})</span>
+            </button>
+          </div>
+        )}
       </div>
 
       {/* MODAL PIATTO */}
@@ -763,6 +941,7 @@ export function MenuPage({
           allPreparations={preparations || []}
           defaultCategory={addToCategory}
           sections={activeSections}
+          restaurant={restaurant}
           onSave={handleSaveDish}
           onClose={() => { setShowAddModal(false); setEditingDish(null); }}
         />

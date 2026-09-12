@@ -135,6 +135,27 @@ export function calcDishFoodCost(components, allIngredients, allPreparations) {
   }, 0);
 }
 
+/**
+ * Stage 10, Punto 1 — UNICA eccezione motivata al divieto di toccare
+ * calcEngine.js: aggiunge un livello di calcolo SOPRA la logica esistente,
+ * non modifica calcMargin/calcDishWithFixedCosts né le loro soglie.
+ *
+ * Il prezzo che il ristoratore inserisce per un piatto è IVA inclusa (quello
+ * che vede sul proprio menu) — non è ricavo pieno, una parte va allo Stato.
+ * Questa funzione calcola il ricavo NETTO da passare a calcMargin/
+ * calcDishWithFixedCosts al posto del prezzo lordo, così margine e food
+ * cost % riflettono quello che resta davvero al ristorante.
+ *
+ * ricavo_netto = prezzo_vendita / (1 + aliquota_iva/100)
+ * Es: €12,00 a IVA 10% → 12 / 1.10 = €10,91
+ */
+export function calcNetRevenue(sellingPrice, vatRatePct) {
+  const price = parseFloat(sellingPrice) || 0;
+  const vat = parseFloat(vatRatePct);
+  if (!isFinite(vat) || vat < 0) return price; // aliquota non valida: nessuna detrazione, fail-safe
+  return price / (1 + vat / 100);
+}
+
 export function calcMargin(sellingPrice, foodCost) {
   const price = parseFloat(sellingPrice) || 0;
   const cost  = parseFloat(foodCost)     || 0;

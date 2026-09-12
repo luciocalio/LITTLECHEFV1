@@ -10,14 +10,14 @@ import { MenuPage }        from './components/menu/MenuPage.jsx';
 import { SettingsModal } from './components/settings/SettingsModal.jsx';
 import { ImportScanner } from './components/import/ImportScanner.jsx';
 import {
-  calcDishFoodCost, calcMargin,
+  calcDishFoodCost, calcMargin, calcNetRevenue,
   calcFixedCostRatio, calcDishWithFixedCosts,
 } from './lib/calcEngine.js';
 import {
   getAllFromDB, dbSetSetting, saveToDB,
   seedDemoSupabase, clearRestaurantCache,
 } from './lib/dataService.js';
-import { DEFAULT_SECTIONS } from './lib/config.js';
+import { DEFAULT_SECTIONS, DEFAULT_VAT_RATE } from './lib/config.js';
 
 export default function App() {
   // ── Autenticazione ────────────────────────────────────────────────────────
@@ -99,6 +99,7 @@ export default function App() {
       const fixed = rawFixed || [];
       const rawD  = rawDishes || [];
       const savedRevenue = restaurant.estimated_monthly_revenue ?? 0;
+      const vatRate = restaurant.vat_rate ?? DEFAULT_VAT_RATE;
 
       const dishs = rawD.map(d => {
         const comps = (d.components || []).filter(c => c.id_ref || c.id);
@@ -110,11 +111,13 @@ export default function App() {
             unit:     c.unit,
           }));
           const fc = calcDishFoodCost(mapped, ings, preps);
-          const { marginEuro, marginPct, status } = calcMargin(d.selling_price || d.price, fc);
+          const netRevenue = calcNetRevenue(d.selling_price || d.price, vatRate);
+          const { marginEuro, marginPct, status } = calcMargin(netRevenue, fc);
           return { ...d, food_cost: fc, margin_euro: marginEuro, margin_pct: marginPct, status };
         }
         const fc = parseFloat(d.food_cost) || 0;
-        const { marginEuro, marginPct, status } = calcMargin(d.selling_price || d.price, fc);
+        const netRevenue = calcNetRevenue(d.selling_price || d.price, vatRate);
+        const { marginEuro, marginPct, status } = calcMargin(netRevenue, fc);
         return { ...d, food_cost: fc, margin_euro: marginEuro, margin_pct: marginPct, status };
       });
 
@@ -150,17 +153,24 @@ export default function App() {
     [totalFixed, estimatedRevenue]
   );
 
-  // ── Piatti arricchiti con i 4 campi derivati (solo per display, non nello state raw)
+  // ── Piatti arricchiti con i campi derivati (solo per display, non nello state raw).
+  // netRevenue/vatRate: il prezzo che l'utente vede e inserisce resta IVA
+  // inclusa (grossPrice) — margine e food cost % si calcolano SEMPRE sul
+  // ricavo netto (Stage 10, Punto 1). Entrambi i valori restano esposti sul
+  // piatto per la UI ("Prezzo menu (IVA incl.)" + "Ricavo netto").
+  const vatRate = restaurant?.vat_rate ?? DEFAULT_VAT_RATE;
   const dishesWithFixed = useMemo(() =>
     (dishes || []).map(d => {
+      const grossPrice = d.selling_price || d.price || 0;
+      const netRevenue = calcNetRevenue(grossPrice, vatRate);
       const derived = calcDishWithFixedCosts(
         d.food_cost || 0,
-        d.selling_price || d.price || 0,
+        netRevenue,
         fixedCostRatio
       );
-      return { ...d, ...derived };
+      return { ...d, ...derived, netRevenue, vatRate };
     }),
-    [dishes, fixedCostRatio]
+    [dishes, fixedCostRatio, vatRate]
   );
 
   // ── Salva estimatedRevenue sulla riga restaurants (Supabase)
