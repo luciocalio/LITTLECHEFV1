@@ -6,6 +6,7 @@ import { supabase } from '../../lib/supabase';
 import { DAILY_MESSAGE_LIMIT, DEFAULT_VAT_RATE } from '../../lib/config';
 import { calcDishFoodCost, calcMargin, calcDishWithFixedCosts, calcNetRevenue, getUnitCategory } from '../../lib/calcEngine';
 import { toNum } from '../../lib/num';
+import { detectAllergens } from '../../lib/allergens';
 
 // La chiave Anthropic vive lato server (funzione /api/chat), mai nel bundle.
 
@@ -54,6 +55,7 @@ const TOOL_LABELS = {
   update_dish_price:        '💾 Aggiorno il prezzo e ricalcolo i margini...',
   get_most_profitable_dish: '🏆 Cerco il piatto più redditizio...',
   update_dish_ingredients:  '🧂 Modifico la ricetta e ricalcolo il food cost...',
+  add_pantry_ingredient:    '🧺 Aggiungo l\'ingrediente in Dispensa...',
 };
 
 function welcomeMessage(name) {
@@ -300,6 +302,7 @@ Hai accesso a questi TOOL per leggere e modificare i dati in tempo reale:
 - update_dish_price: Cambia prezzo di vendita
 - get_most_profitable_dish: Piatto più redditizio
 - update_dish_ingredients: Aggiunge, rimuove o sostituisce un ingrediente/preparazione nella ricetta di un piatto (azioni "add" / "remove" / "replace")
+- add_pantry_ingredient: Aggiunge un nuovo ingrediente in Dispensa (nome, prezzo, unità di misura)
 
 QUANDO L'UTENTE CHIEDE:
 1. "Quali piatti sono critici?" o "Margini bassi?" → usa get_critical_dishes
@@ -307,12 +310,15 @@ QUANDO L'UTENTE CHIEDE:
 3. "Aumenta prezzo di [piatto]?" → usa update_dish_price
 4. "Quale piatto è più redditizio?" → usa get_most_profitable_dish e riporta ESPLICITAMENTE ENTRAMBE le metriche: il piatto con margine PERCENTUALE più alto E il piatto con GUADAGNO ASSOLUTO in € per porzione più alto. Se sono piatti diversi, chiariscilo (un margine % alto può valere pochi centesimi se il piatto costa poco).
 5. "Sostituisci [ingrediente A] con [ingrediente B] in [piatto]", "Aggiungi [ingrediente] a [piatto]", "Togli [ingrediente] da [piatto]" → usa update_dish_ingredients con action="replace"/"add"/"remove". Dopo la chiamata, conferma ESPLICITAMENTE cosa hai cambiato e il nuovo food cost/margine, leggendo SOLO i valori restituiti dal tool.
-6. SEMPRE rispondi in italiano con spiegazione, mai solo numeri
+6. "Aggiungi [ingrediente] in dispensa/magazzino", oppure se update_dish_ingredients ti dice che un ingrediente non esiste in Dispensa e l'utente conferma di volerlo creare → usa add_pantry_ingredient.
+7. SEMPRE rispondi in italiano con spiegazione, mai solo numeri
 
 REGOLA SU update_dish_ingredients — QUANTITÀ (fondamentale, non derogabile):
 - action="add": la quantità è OBBLIGATORIA. Se l'utente non l'ha specificata, NON chiamare il tool con un valore inventato: chiedi prima la quantità in chat e aspetta la risposta.
 - action="replace": se l'utente non specifica la quantità del nuovo ingrediente, chiama comunque il tool SENZA il campo quantity — il tool manterrà automaticamente la stessa quantità dell'ingrediente sostituito (mai un valore a caso) e te lo confermerà nel risultato (quantityInherited: true). Riporta questo dato nella risposta all'utente.
 - Se il tool restituisce needsQuantity oppure error, NON riprovare inventando un numero: rispondi in chat chiedendo l'informazione mancante.
+
+REGOLA SU add_pantry_ingredient — PREZZO E UNITÀ (fondamentale, non derogabile): entrambi sono obbligatori. Se l'utente non specifica il prezzo, o l'unità di misura (kg/g/L/ml/pz...), NON chiamare il tool inventando un valore plausibile: chiedi prima le informazioni mancanti in chat. Se il tool restituisce needsInfo o error (es. ingrediente già esistente), non riprovare da solo: rispondi all'utente riportando il messaggio.
 
 REGOLA SUI NUMERI (fondamentale): quando citi un numero (margine, prezzo, food cost, guadagno) usa SEMPRE il valore restituito dall'ultimo tool o dai DATI ATTUALI qui sopra, MAI un valore che avevi menzionato prima nella conversazione. Se in questo turno hai appena modificato un prezzo o una ricetta con update_dish_price/update_dish_ingredients, usa i nuovi valori restituiti dal tool, non quelli vecchi.
 
@@ -374,6 +380,19 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
               unit: { type: 'string', description: 'Unità di misura (g, kg, ml, L, pz, porzione, fetta...). Opzionale: se omessa si usa l\'unità base dell\'ingrediente in Dispensa, o quella dell\'ingrediente sostituito se compatibile (per action="replace").' },
             },
             required: ['dishName', 'action'],
+          },
+        },
+        {
+          name: 'add_pantry_ingredient',
+          description: 'Aggiunge un nuovo ingrediente in Dispensa con nome, prezzo e unità di misura.',
+          input_schema: {
+            type: 'object',
+            properties: {
+              ingredientName: { type: 'string', description: 'Nome del nuovo ingrediente' },
+              price: { type: 'number', description: 'Prezzo per l\'unità di misura indicata (es. €/kg). OBBLIGATORIO: se non lo conosci, NON chiamare il tool, chiedilo prima all\'utente.' },
+              unit: { type: 'string', enum: ['kg', 'g', 'dag', 'L', 'dl', 'cl', 'ml', 'pz', 'porzione', 'fetta'], description: 'Unità di misura. OBBLIGATORIA: se l\'utente non la specifica, NON dedurla da solo, chiedila prima.' },
+            },
+            required: ['ingredientName', 'price', 'unit'],
           },
         },
       ];
@@ -680,6 +699,68 @@ FORMATTAZIONE: puoi usare markdown semplice — **grassetto** per i valori chiav
             sellingPrice: (newEnriched.selling_price || newEnriched.price || 0).toFixed(2),
             netRevenue: (newEnriched.netRevenue || 0).toFixed(2),
             vatRatePct: newEnriched.vatRate,
+          });
+        }
+        if (toolName === 'add_pantry_ingredient') {
+          const ingredientName = (toolInput.ingredientName || '').trim();
+          if (!ingredientName) return JSON.stringify({ error: 'Specifica il nome dell\'ingrediente.' });
+
+          const price = toNum(toolInput.price);
+          if (!(price > 0)) {
+            return JSON.stringify({
+              needsInfo: true,
+              message: `Serve il prezzo di "${ingredientName}" (es. "3,50 al kg"). Chiedilo all'utente, non inventarlo.`,
+            });
+          }
+          const VALID_UNITS = ['kg', 'g', 'dag', 'L', 'dl', 'cl', 'ml', 'pz', 'porzione', 'fetta'];
+          const unit = (toolInput.unit || '').trim();
+          if (!VALID_UNITS.includes(unit)) {
+            return JSON.stringify({
+              needsInfo: true,
+              message: `Serve l'unità di misura di "${ingredientName}" (kg, g, L, ml, pz...). Chiedila all'utente, non inventarla.`,
+            });
+          }
+
+          // (a) Lettura FRESCA — evita di creare un duplicato se esiste già
+          const freshIngredients = await getAllFromDB('ingredients');
+          const existing = freshIngredients.find(i => i.name?.toLowerCase().trim() === ingredientName.toLowerCase());
+          if (existing) {
+            return JSON.stringify({
+              error: `"${existing.name}" è già in Dispensa (€${(parseFloat(existing.price_per_unit ?? existing.price) || 0).toFixed(2)}/${existing.unit}). Per cambiarne il prezzo va modificato manualmente in Dispensa per ora.`,
+            });
+          }
+
+          const newIngredient = {
+            id:             `ing_${crypto.randomUUID()}`,
+            name:           ingredientName,
+            unit,
+            price,
+            price_per_unit: price,
+            waste:          0,
+            allergens:      detectAllergens(ingredientName),
+            _isPrep:        false,
+            updated_at:     new Date().toISOString(),
+          };
+
+          // (b) Scrittura — restaurant_id impostato da saveToDB() in base al
+          // ristorante dell'utente loggato: non può mai scrivere altrove.
+          await saveToDB('ingredients', newIngredient);
+
+          // (c) Rilettura da Supabase per confermare che la scrittura sia
+          // riuscita davvero — solo ORA si dichiara successo.
+          const verifyIngredients = await getAllFromDB('ingredients');
+          const verifyFromDB = verifyIngredients.find(i => i.id === newIngredient.id);
+          if (!verifyFromDB || Number(verifyFromDB.price_per_unit) !== price) {
+            return JSON.stringify({ error: 'Errore: la scrittura su Supabase non è riuscita.' });
+          }
+
+          setIngredients(prev => [...prev, verifyFromDB]);
+
+          return JSON.stringify({
+            success: true,
+            ingredientName: verifyFromDB.name,
+            price: (parseFloat(verifyFromDB.price_per_unit) || 0).toFixed(2),
+            unit: verifyFromDB.unit,
           });
         }
         if (toolName === 'get_most_profitable_dish') {
