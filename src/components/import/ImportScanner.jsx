@@ -9,13 +9,19 @@
 //  SEMPRE una revisione modificabile PRIMA di scrivere su Supabase.
 //  Nessun salvataggio automatico o silenzioso, mai.
 // ══════════════════════════════════════════════════════════════
-import { useState, useRef } from 'react';
+import { useState, useRef, Fragment } from 'react';
 import * as XLSX from 'xlsx';
 import { saveToDB } from '../../lib/dataService';
 import { MAX_DISH_PRICE, MAX_INGREDIENT_PRICE } from '../../lib/config';
 
 const uid = () => Math.random().toString(36).slice(2, 10);
 const num = v => { const n = parseFloat(String(v).replace(',', '.')); return isNaN(n) ? '' : n; };
+
+// Oltre questa soglia il base64 (+33% di peso) supera il limite di payload
+// delle funzioni serverless Vercel (4.5MB): la richiesta verrebbe rifiutata
+// dalla piattaforma prima ancora di raggiungere /api/scan, con un errore
+// poco chiaro. Blocchiamo qui con un messaggio esplicito (Problema 2).
+const MAX_SCAN_FILE_BYTES = 3 * 1024 * 1024; // 3MB
 
 // Configurazione per tipo di destinazione
 const KINDS = {
@@ -64,7 +70,14 @@ function mapScanned(items, kind) {
   return (items || []).map(it => {
     const base = { id: uid(), name: (it.name || '').toString() };
     if (kind === 'dishes')      return { ...base, price: num(it.price), category: (it.category || '').toString().toUpperCase() };
-    if (kind === 'pantry')      return { ...base, price: num(it.price), unit: (it.unit || '').toString() };
+    if (kind === 'pantry')      return {
+      ...base, price: num(it.price), unit: (it.unit || '').toString(),
+      // Trasparenza calcolo (Problema 1, punto 3 / Problema 3) — mai solo il
+      // numero finale: calcExplanation arriva già pronta da computePantryItem.
+      calcExplanation: it.calcExplanation || null,
+      packageWarning:  it.packageWarning || null,
+      crossCheckOk:    it.crossCheckOk ?? null,
+    };
     return { ...base, price: num(it.amount) }; // fixed_costs: amount → price
   }).filter(x => x.name.trim());
 }
@@ -107,6 +120,13 @@ export function ImportScanner({ kind = 'dishes', onClose, onImported }) {
     }
 
     // Immagine o PDF → /api/scan (prompt specifico per tipo)
+    if (file.size > MAX_SCAN_FILE_BYTES) {
+      const mb = (file.size / (1024 * 1024)).toFixed(1);
+      const maxMb = (MAX_SCAN_FILE_BYTES / (1024 * 1024)).toFixed(0);
+      setError(`File troppo grande (${mb}MB): il limite per foto/PDF è ${maxMb}MB. Comprimi il file o scatta una foto a risoluzione più bassa.`);
+      return;
+    }
+
     setStep('loading');
     try {
       const b64 = await fileToBase64(file);
@@ -115,7 +135,20 @@ export function ImportScanner({ kind = 'dishes', onClose, onImported }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ fileBase64: b64, mediaType: file.type || 'image/jpeg', kind }),
       });
-      const data = await resp.json();
+      // La piattaforma (Vercel) può rifiutare la richiesta PRIMA che /api/scan
+      // la veda (es. payload troppo pesante): in quel caso il corpo non è
+      // JSON e resp.json() lancerebbe un errore poco chiaro — lo gestiamo
+      // esplicitamente invece di far fallire il parsing in modo silenzioso.
+      let data;
+      try {
+        data = await resp.json();
+      } catch {
+        throw new Error(
+          resp.status === 413
+            ? 'File troppo grande per essere elaborato dal server. Riducilo e riprova.'
+            : `Errore del server (${resp.status}). Riprova con un file più leggero o in un altro formato.`
+        );
+      }
       if (!resp.ok) throw new Error(data?.error?.message || 'Estrazione non riuscita');
       const mapped = mapScanned(data.items, kind);
       if (!mapped.length) { setStep('empty'); return; }
@@ -205,7 +238,7 @@ export function ImportScanner({ kind = 'dishes', onClose, onImported }) {
                 {kind === 'dishes'      && 'Estrarrò solo i piatti con il prezzo di vendita da un menù.'}
               </p>
               <p style={{ fontSize: 11, color: 'var(--text-muted)', marginTop: 8, textAlign: 'center' }}>
-                Accetta foto (JPG/PNG), PDF, Excel o CSV. Su telefono puoi scattare la foto al momento.
+                Accetta foto (JPG/PNG), PDF, Excel o CSV, fino a 3MB. Su telefono puoi scattare la foto al momento.
               </p>
             </>
           )}
@@ -245,24 +278,52 @@ export function ImportScanner({ kind = 'dishes', onClose, onImported }) {
                     </tr>
                   </thead>
                   <tbody>
-                    {rows.map((r, i) => (
-                      <tr key={r.id} style={{ borderTop: '1px solid var(--border-color)' }}>
-                        <td style={{ padding: '4px' }}>
-                          <input className="form-input" value={r.name} onChange={e => updateRow(i, 'name', e.target.value)} style={{ padding: '6px 8px', fontSize: 16 }} />
-                        </td>
-                        {cfg.secondCol && (
-                          <td style={{ padding: '4px' }}>
-                            <input className="form-input" value={r[cfg.secondCol.key] || ''} onChange={e => updateRow(i, cfg.secondCol.key, e.target.value)} style={{ padding: '6px 8px', fontSize: 16 }} />
-                          </td>
-                        )}
-                        <td style={{ padding: '4px' }}>
-                          <input className="form-input" type="number" step="0.01" value={r.price} onChange={e => updateRow(i, 'price', e.target.value)} style={{ padding: '6px 8px', fontSize: 16, fontFamily: 'var(--font-mono)', textAlign: 'right' }} />
-                        </td>
-                        <td style={{ textAlign: 'center' }}>
-                          <button className="btn-icon" onClick={() => removeRow(i)} style={{ color: 'var(--status-risk)', minWidth: 44, minHeight: 44 }}>🗑️</button>
-                        </td>
-                      </tr>
-                    ))}
+                    {rows.map((r, i) => {
+                      const calc = kind === 'pantry' ? r.calcExplanation : null;
+                      const showCrossCheckWarning = kind === 'pantry' && r.crossCheckOk === false;
+                      const hasNote = calc || r.packageWarning || showCrossCheckWarning;
+                      return (
+                        <Fragment key={r.id}>
+                          <tr style={{ borderTop: '1px solid var(--border-color)' }}>
+                            <td style={{ padding: '4px' }}>
+                              <input className="form-input" value={r.name} onChange={e => updateRow(i, 'name', e.target.value)} style={{ padding: '6px 8px', fontSize: 16 }} />
+                            </td>
+                            {cfg.secondCol && (
+                              <td style={{ padding: '4px' }}>
+                                <input className="form-input" value={r[cfg.secondCol.key] || ''} onChange={e => updateRow(i, cfg.secondCol.key, e.target.value)} style={{ padding: '6px 8px', fontSize: 16 }} />
+                              </td>
+                            )}
+                            <td style={{ padding: '4px' }}>
+                              <input className="form-input" type="number" step="0.01" value={r.price} onChange={e => updateRow(i, 'price', e.target.value)} style={{ padding: '6px 8px', fontSize: 16, fontFamily: 'var(--font-mono)', textAlign: 'right' }} />
+                            </td>
+                            <td style={{ textAlign: 'center' }}>
+                              <button className="btn-icon" onClick={() => removeRow(i)} style={{ color: 'var(--status-risk)', minWidth: 44, minHeight: 44 }}>🗑️</button>
+                            </td>
+                          </tr>
+                          {hasNote && (
+                            <tr>
+                              <td colSpan={cfg.secondCol ? 4 : 3} style={{ padding: '0 4px 8px' }}>
+                                {calc && (
+                                  <p style={{ fontSize: 11, color: 'var(--text-muted)', margin: 0, fontFamily: 'var(--font-mono)' }}>
+                                    🧮 {calc}
+                                  </p>
+                                )}
+                                {r.packageWarning && (
+                                  <p style={{ fontSize: 11, color: 'var(--gold-text)', margin: '2px 0 0', fontWeight: 600 }}>
+                                    ⚠️ {r.packageWarning}
+                                  </p>
+                                )}
+                                {showCrossCheckWarning && (
+                                  <p style={{ fontSize: 11, color: 'var(--status-risk)', margin: '2px 0 0' }}>
+                                    ⚠️ Il calcolo non coincide con l'importo di riga in fattura: verifica sconto e quantità.
+                                  </p>
+                                )}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })}
                   </tbody>
                 </table>
               </div>
